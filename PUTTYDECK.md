@@ -1,16 +1,32 @@
 # PuTTYDeck
 
 PuTTY 0.85 with all your sessions in one window. Open sessions are listed on
-the left; click one to switch to it. It is a single `puttydeck.exe` with no
-installer or runtime to add, and it uses your existing PuTTY saved sessions and
-known host keys.
+the left; click one to switch to it. It uses your existing PuTTY saved sessions
+and known host keys.
 
 Each session is still a separate PuTTY process, embedded as a child window, so
 one session crashing or hanging doesn't take the others with it.
 
+## Installing
+
+Run `PuTTYDeck-0.85-setup.exe`. It installs for the current user, so it doesn't
+need administrator rights, and it needs Windows 10 or later (64-bit). You get a
+Start menu entry and an entry in Settings > Apps > Installed apps, which is also
+how you uninstall it. Uninstalling keeps your saved sessions.
+
+The installer isn't code-signed, so on another PC Windows SmartScreen may warn
+about it. Choose **More info**, then **Run anyway**.
+
+Close PuTTYDeck before upgrading or uninstalling. For scripted use:
+
+    PuTTYDeck-0.85-setup.exe /S
+    "%LOCALAPPDATA%\Programs\PuTTYDeck\uninstall.exe" /U /S
+
+`puttydeck.exe` also works on its own without installing.
+
 ## Using it
 
-Run `puttydeck.exe`. **New session** opens the normal PuTTY configuration
+Start PuTTYDeck from the Start menu. **New session** opens the normal PuTTY configuration
 box; double-clicking a saved session connects straight away. Arguments are
 passed to the first session, for example `puttydeck.exe -ssh user@host`.
 
@@ -64,7 +80,11 @@ Needs the Visual Studio 2022 Build Tools (C++), which include CMake and Ninja.
 
     build-deck.cmd
 
-The result is `build-deck\puttydeck.exe`. This branch is PuTTY 0.85 plus the deck, with the host in `windows\deck.c` and `windows\deck.h`.
+The results are `build-deck\puttydeck.exe` and the installer,
+`build-deck\PuTTYDeck-0.85-setup.exe`, whose source is in `installer\`. The C
+runtime is linked statically, so neither needs anything else on the target PC.
+This branch is PuTTY 0.85 plus the deck, with the host in `windows\deck.c` and
+`windows\deck.h`.
 The changes to PuTTY itself are guarded by `deck_parent`, so the ordinary
 `putty` target still builds as before.
 

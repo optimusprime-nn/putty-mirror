@@ -1,0 +1,30 @@
+#include <windows.h>
+#include "setup.h"
+
+IDI_SETUP ICON "..\\windows\\putty.ico"
+IDR_PUTTYDECK RCDATA "..\\build-deck\\puttydeck.exe"
+IDR_LICENCE RCDATA "..\\LICENCE"
+1 RT_MANIFEST "setup.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,85,0,0
+PRODUCTVERSION 0,85,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "PuTTYDeck Setup"
+            VALUE "FileVersion", "0.85"
+            VALUE "ProductName", "PuTTYDeck"
+            VALUE "ProductVersion", "0.85"
+            VALUE "Comments", "Unofficial modification of PuTTY"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
