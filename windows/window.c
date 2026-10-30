@@ -65,6 +65,8 @@
 #define WM_FULLSCR_ON_MAX (WM_APP + 3)
 #define WM_GOT_CLIPDATA (WM_APP + 4)
 
+#include "deck.h"
+
 /* Needed for Chinese support and apparently not always defined. */
 #ifndef VK_PROCESSKEY
 #define VK_PROCESSKEY 0xE5
@@ -119,6 +121,9 @@ static void setup_clipboards(Terminal *, Conf *);
 static void reset_window(WinGuiSeat *wgs, int reinit);
 
 static void flash_window(WinGuiSeat *wgs, int mode);
+static void wm_size_resize_term(WinGuiSeat *wgs, LPARAM lParam);
+static bool deck_handle_key(WinGuiSeat *wgs, WPARAM key);
+static bool terminal_window_focused(WinGuiSeat *wgs);
 static void sys_cursor_update(WinGuiSeat *wgs);
 static bool get_fullscreen_rect(WinGuiSeat *wgs, RECT *ss);
 static bool get_workingarea_rect(WinGuiSeat *wgs, RECT *ss);
@@ -453,6 +458,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     hinst = inst;
     hprev = prev;
 
+#ifdef PUTTYDECK
+    if (!deck_find_parent()) {
+        init_common_controls();
+        return deck_host_main(inst, show);
+    }
+#endif
+
     sk_init();
 
     init_common_controls();
@@ -563,6 +575,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
             exwinmode |= WS_EX_TOPMOST;
         if (conf_get_bool(wgs->conf, CONF_sunken_edge))
             exwinmode |= WS_EX_CLIENTEDGE;
+        if (deck_parent) {
+            /* The deck supplies the frame, and stays in charge of our
+             * position, size and z-order. */
+            winmode = (winmode & WS_VSCROLL) | WS_CHILD | WS_CLIPSIBLINGS;
+            exwinmode &= ~WS_EX_TOPMOST;
+        }
 
 #ifdef TEST_ANSI_WINDOW
         /* For developer testing of ANSI window support, pretend
@@ -577,7 +595,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         wgs->term_hwnd = CreateWindowExW(
             exwinmode, terminal_window_class_w(), uappname,
             winmode, CW_USEDEFAULT, CW_USEDEFAULT,
-            guess_width, guess_height, NULL, NULL, inst, NULL);
+            guess_width, guess_height, deck_parent, NULL, inst, NULL);
 #endif
 
 #if defined LEGACY_WINDOWS || defined TEST_ANSI_WINDOW
@@ -591,7 +609,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
             wgs->term_hwnd = CreateWindowExA(
                 exwinmode, terminal_window_class_a(), appname,
                 winmode, CW_USEDEFAULT, CW_USEDEFAULT,
-                guess_width, guess_height, NULL, NULL, inst, NULL);
+                guess_width, guess_height, deck_parent, NULL, inst, NULL);
         }
 #endif
 
@@ -656,7 +674,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      * Resize the window to that size, also repositioning it if it's extended
      * off the edge of a monitor.
      */
-    {
+    if (deck_parent) {
+        /* Fill the panel now, so the server hears the right size from
+         * the start. */
+        RECT pr;
+        GetClientRect(deck_parent, &pr);
+        SetWindowPos(wgs->term_hwnd, NULL, 0, 0, pr.right, pr.bottom,
+                     SWP_NOREDRAW | SWP_NOZORDER);
+    } else {
         /* Find the previous coordinates of the window */
         RECT winr;
         GetWindowRect(wgs->term_hwnd, &winr);
@@ -768,7 +793,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
             AppendMenu(m, MF_ENABLED, IDM_RESET, "Rese&t Terminal");
             AppendMenu(m, MF_SEPARATOR, 0, 0);
             AppendMenu(m, (conf_get_int(wgs->conf, CONF_resize_action)
-                           == RESIZE_DISABLED) ? MF_GRAYED : MF_ENABLED,
+                           == RESIZE_DISABLED || deck_parent) ?
+                       MF_GRAYED : MF_ENABLED,
                        IDM_FULLSCREEN, "&Full Screen");
             AppendMenu(m, MF_SEPARATOR, 0, 0);
             if (has_help())
@@ -794,10 +820,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     /*
      * Finally show the window!
      */
-    ShowWindow(wgs->term_hwnd, show);
-    SetForegroundWindow(wgs->term_hwnd);
+    if (deck_parent) {
+        /* The host shows us when it selects us. */
+        PostMessage(deck_parent, WM_DECK_ATTACH,
+                    (WPARAM)wgs->term_hwnd, 0);
+    } else {
+        ShowWindow(wgs->term_hwnd, show);
+        SetForegroundWindow(wgs->term_hwnd);
+    }
 
-    term_set_focus(wgs->term, GetForegroundWindow() == wgs->term_hwnd);
+    term_set_focus(wgs->term, terminal_window_focused(wgs));
     UpdateWindow(wgs->term_hwnd);
 
     gui_terminal_ready(wgs->term_hwnd, &wgs->seat, wgs->backend);
@@ -829,7 +861,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
         } else {
             timeout = INFINITE;
             /* The messages seem unreliable; especially if we're being tricky */
-            term_set_focus(wgs->term, GetForegroundWindow() == wgs->term_hwnd);
+            term_set_focus(wgs->term, terminal_window_focused(wgs));
         }
 
         HandleWaitList *hwl = get_handle_wait_list();
@@ -1713,6 +1745,7 @@ static void wintw_request_resize(TermWin *tw, int w, int h)
     if (vt && vt->flags & BACKEND_RESIZE_FORBIDDEN)
         deny_resize = true;
     if (h == wgs->term->rows && w == wgs->term->cols) deny_resize = true;
+    if (deck_parent) deny_resize = true; /* the deck decides our size */
 
     /* We still need to acknowledge a suppressed resize attempt. */
     if (deny_resize) {
@@ -1813,6 +1846,15 @@ static void reset_window(WinGuiSeat *wgs, int reinit)
     /* Oh, looks like we're minimised */
     if (win_width == 0 || win_height == 0)
         return;
+
+    /* Embedded, the window size is fixed by the deck, so all a change
+     * of font or border can alter is how much terminal fits in it. */
+    if (deck_parent) {
+        wm_size_resize_term(wgs, MAKELPARAM(win_width, win_height));
+        recompute_window_offset(wgs);
+        InvalidateRect(wgs->term_hwnd, NULL, true);
+        return;
+    }
 
     /* Is the window out of position ? */
     if (!reinit) {
@@ -2137,6 +2179,17 @@ static void conf_cache_data(WinGuiSeat *wgs)
     /* Cache some items from conf to speed lookups in very hot code */
     wgs->cursor_type = conf_get_int(wgs->conf, CONF_cursor_type);
     wgs->vtmode = conf_get_int(wgs->conf, CONF_vtmode);
+
+    /* Only this mode makes the terminal track the deck's panel */
+    if (deck_parent)
+        conf_set_int(wgs->conf, CONF_resize_action, RESIZE_TERM);
+}
+
+static bool terminal_window_focused(WinGuiSeat *wgs)
+{
+    if (deck_parent)
+        return GetFocus() == wgs->term_hwnd;
+    return GetForegroundWindow() == wgs->term_hwnd;
 }
 
 static const int clips_system[] = { CLIP_SYSTEM };
@@ -2201,6 +2254,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
     int resize_action;
     WinGuiSeat *wgs = (WinGuiSeat *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
+    /* CreateWindow sends a child window WM_SIZE and WM_MOVE, which
+     * arrive before we've been able to set GWLP_USERDATA */
+    if (deck_parent && !wgs)
+        return sw_DefWindowProc(hwnd, message, wParam, lParam);
+
     switch (message) {
       case WM_CREATE:
         break;
@@ -2227,6 +2285,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
       }
       case WM_DESTROY:
         show_mouseptr(wgs, true);
+        if (deck_parent)
+            PostMessage(deck_parent, WM_DECK_DETACH, (WPARAM)hwnd, 0);
         PostQuitMessage(0);
         return 0;
       case WM_INITMENUPOPUP:
@@ -2610,6 +2670,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
       case WM_LBUTTONUP:
       case WM_MBUTTONUP:
       case WM_RBUTTONUP:
+        /* Windows only gives keyboard focus to top-level windows */
+        if (deck_parent && (message == WM_LBUTTONDOWN ||
+                            message == WM_MBUTTONDOWN ||
+                            message == WM_RBUTTONDOWN))
+            SetFocus(hwnd);
         if (message == WM_RBUTTONDOWN &&
             ((wParam & MK_CONTROL) ||
              (conf_get_int(wgs->conf, CONF_mouse_is_xterm) == MOUSE_WINDOWS))) {
@@ -3011,6 +3076,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
             return rv;
         }
         /* break;  (never reached) */
+      case WM_DECK_EXEC:
+        switch (wParam) {
+          case DECK_EXEC_COPY:
+            term_request_copy(wgs->term, clips_system, lenof(clips_system));
+            break;
+          case DECK_EXEC_PASTE:
+            term_request_paste(wgs->term, CLIP_SYSTEM);
+            break;
+          case DECK_EXEC_COPYALL:
+            term_copyall(wgs->term, clips_system, lenof(clips_system));
+            break;
+          case DECK_EXEC_DUPLICATE:
+            PostMessage(hwnd, WM_COMMAND, IDM_DUPSESS, 0);
+            break;
+          case DECK_EXEC_QUIT:
+            DestroyWindow(hwnd);
+            break;
+        }
+        return 0;
       case WM_FULLSCR_ON_MAX:
         wgs->fullscr_on_max = true;
         break;
@@ -3234,6 +3318,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
          * number noise.
          */
         noise_ultralight(NOISE_SOURCE_KEY, lParam);
+
+        if (deck_parent && (message == WM_KEYDOWN ||
+                            message == WM_SYSKEYDOWN) &&
+            deck_handle_key(wgs, wParam))
+            return 0;
 
         /*
          * We don't do TranslateMessage since it disassociates the
@@ -4833,6 +4922,8 @@ static void wintw_set_title(TermWin *tw, const char *title, int codepage)
     if (conf_get_bool(wgs->conf, CONF_win_name_always) ||
         !IsIconic(wgs->term_hwnd))
         sw_SetWindowText(wgs->term_hwnd, wgs->window_name);
+    if (deck_parent)
+        PostMessage(deck_parent, WM_DECK_TITLE, (WPARAM)wgs->term_hwnd, 0);
 }
 
 static void wintw_set_icon_title(TermWin *tw, const char *title, int codepage)
@@ -5404,15 +5495,33 @@ static DWORD WINAPI clipboard_read_threadfunc(void *param)
     HWND hwnd = (HWND)param;
     HGLOBAL clipdata;
 
-    if (OpenClipboard(NULL)) {
-        if ((clipdata = GetClipboardData(CF_UNICODETEXT))) {
-            SendMessage(hwnd, WM_GOT_CLIPDATA,
-                        (WPARAM)true, (LPARAM)clipdata);
-        } else if ((clipdata = GetClipboardData(CF_TEXT))) {
-            SendMessage(hwnd, WM_GOT_CLIPDATA,
-                        (WPARAM)false, (LPARAM)clipdata);
+    /*
+     * Only one process can use the clipboard at a time, and Paste to
+     * All sets several sessions on it at once, so in a deck we must
+     * be prepared to wait our turn: either the open fails outright,
+     * or it succeeds but the data doesn't come back. We're in a
+     * thread of our own, so it's safe to block here.
+     */
+    for (int tries = 0; tries < 200; tries++) {
+        if (OpenClipboard(NULL)) {
+            bool done = true;
+            if ((clipdata = GetClipboardData(CF_UNICODETEXT))) {
+                SendMessage(hwnd, WM_GOT_CLIPDATA,
+                            (WPARAM)true, (LPARAM)clipdata);
+            } else if ((clipdata = GetClipboardData(CF_TEXT))) {
+                SendMessage(hwnd, WM_GOT_CLIPDATA,
+                            (WPARAM)false, (LPARAM)clipdata);
+            } else {
+                done = false;
+            }
+            CloseClipboard();
+            if (done)
+                break;
         }
-        CloseClipboard();
+        if (!deck_parent || (!IsClipboardFormatAvailable(CF_UNICODETEXT) &&
+                             !IsClipboardFormatAvailable(CF_TEXT)))
+            break;
+        Sleep(10);
     }
 
     return 0;
@@ -5658,7 +5767,12 @@ static void wintw_bell(TermWin *tw, int mode)
         wgs->last_beep_time = GetTickCount();
     }
     /* Otherwise, either visual bell or disabled; do nothing here */
-    if (!wgs->term->has_focus) {
+    if (deck_parent) {
+        /* A child window can't flash, so the sidebar marks it instead */
+        if (!wgs->term->has_focus)
+            PostMessage(deck_parent, WM_DECK_BELL,
+                        (WPARAM)wgs->term_hwnd, 0);
+    } else if (!wgs->term->has_focus) {
         flash_window(wgs, 2);               /* start */
     }
 }
@@ -5670,6 +5784,8 @@ static void wintw_bell(TermWin *tw, int mode)
 static void wintw_set_minimised(TermWin *tw, bool minimised)
 {
     WinGuiSeat *wgs = container_of(tw, WinGuiSeat, termwin);
+    if (deck_parent)
+        return;
     if (IsIconic(wgs->term_hwnd)) {
         if (!minimised)
             ShowWindow(wgs->term_hwnd, SW_RESTORE);
@@ -5688,7 +5804,7 @@ static void wintw_move(TermWin *tw, int x, int y)
     int resize_action = conf_get_int(wgs->conf, CONF_resize_action);
     if (resize_action == RESIZE_DISABLED ||
         resize_action == RESIZE_FONT ||
-        IsZoomed(wgs->term_hwnd))
+        IsZoomed(wgs->term_hwnd) || deck_parent)
         return;
 
     SetWindowPos(wgs->term_hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
@@ -5701,7 +5817,7 @@ static void wintw_move(TermWin *tw, int x, int y)
 static void wintw_set_zorder(TermWin *tw, bool top)
 {
     WinGuiSeat *wgs = container_of(tw, WinGuiSeat, termwin);
-    if (conf_get_bool(wgs->conf, CONF_alwaysontop))
+    if (conf_get_bool(wgs->conf, CONF_alwaysontop) || deck_parent)
         return;                        /* ignore */
     SetWindowPos(wgs->term_hwnd, top ? HWND_TOP : HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE);
@@ -5723,6 +5839,8 @@ static void wintw_refresh(TermWin *tw)
 static void wintw_set_maximised(TermWin *tw, bool maximised)
 {
     WinGuiSeat *wgs = container_of(tw, WinGuiSeat, termwin);
+    if (deck_parent)
+        return;
     if (IsZoomed(wgs->term_hwnd)) {
         if (!maximised)
             ShowWindow(wgs->term_hwnd, SW_RESTORE);
@@ -5850,6 +5968,10 @@ static void clear_full_screen(WinGuiSeat *wgs)
 {
     DWORD oldstyle, style;
 
+    /* We're never full-screen embedded, and must not grow a frame */
+    if (deck_parent)
+        return;
+
     /* Reinstate the window furniture. */
     style = oldstyle = GetWindowLongPtr(wgs->term_hwnd, GWL_STYLE);
     style |= WS_CAPTION | WS_BORDER;
@@ -5882,6 +6004,9 @@ static void clear_full_screen(WinGuiSeat *wgs)
  */
 static void flip_full_screen(WinGuiSeat *wgs)
 {
+    if (deck_parent)
+        return;
+
     if (is_full_screen(wgs)) {
         ShowWindow(wgs->term_hwnd, SW_RESTORE);
     } else if (IsZoomed(wgs->term_hwnd)) {
@@ -5947,4 +6072,69 @@ static bool win_seat_get_window_pixel_size(Seat *seat, int *x, int *y)
     *x = r.right - r.left;
     *y = r.bottom - r.top;
     return true;
+}
+
+/*
+ * Keys handled on behalf of PuTTYDeck, before TranslateKey sees them.
+ * Returns true if the key has been used up.
+ */
+static bool deck_handle_key(WinGuiSeat *wgs, WPARAM key)
+{
+    bool ctrl = GetKeyState(VK_CONTROL) < 0;
+    bool shift = GetKeyState(VK_SHIFT) < 0;
+    bool alt = GetKeyState(VK_MENU) < 0;
+
+    if (!ctrl || alt)                  /* Ctrl+Alt is also AltGr */
+        return false;
+
+    if (shift) {
+        if (key >= '1' && key <= '9') {
+            PostMessage(deck_parent, WM_DECK_CMD, DECK_CMD_SELECT, key - '1');
+            return true;
+        }
+        switch (key) {
+          case 'C':
+            term_request_copy(wgs->term, clips_system, lenof(clips_system));
+            return true;
+          case 'V':
+            term_request_paste(wgs->term, CLIP_SYSTEM);
+            return true;
+          case 'T':
+            PostMessage(deck_parent, WM_DECK_CMD, DECK_CMD_NEW, 0);
+            return true;
+          case 'W':
+            PostMessage(deck_parent, WM_DECK_CMD, DECK_CMD_CLOSE, 0);
+            return true;
+          case 'D':
+            PostMessage(wgs->term_hwnd, WM_COMMAND, IDM_DUPSESS, 0);
+            return true;
+          case VK_TAB:
+            PostMessage(deck_parent, WM_DECK_CMD, DECK_CMD_PREV, 0);
+            return true;
+        }
+        return false;
+    }
+
+    switch (key) {
+      case VK_TAB:
+        PostMessage(deck_parent, WM_DECK_CMD, DECK_CMD_NEXT, 0);
+        return true;
+      case 'C':
+        /* With nothing selected, Ctrl+C is still an interrupt */
+        if (term_has_selection(wgs->term)) {
+            term_request_copy(wgs->term, clips_system, lenof(clips_system));
+            term_clear_selection(wgs->term);
+            return true;
+        }
+        return false;
+      case 'V':
+        /* Full-screen programs like vim and nano want Ctrl+V for
+         * themselves. Ctrl+Shift+V still pastes into them. */
+        if (!term_on_alt_screen(wgs->term)) {
+            term_request_paste(wgs->term, CLIP_SYSTEM);
+            return true;
+        }
+        return false;
+    }
+    return false;
 }

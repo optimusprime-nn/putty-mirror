@@ -6830,6 +6830,22 @@ static void paste_from_clip_local(void *vterm)
     term_do_paste(term, term->last_selected_text, term->last_selected_len);
 }
 
+bool term_has_selection(Terminal *term)
+{
+    return term->selstate == SELECTED;
+}
+
+void term_clear_selection(Terminal *term)
+{
+    deselect(term);
+    term_update(term);
+}
+
+bool term_on_alt_screen(Terminal *term)
+{
+    return term->alt_which != 0;
+}
+
 void term_request_copy(Terminal *term, const int *clipboards, int n_clipboards)
 {
     int i;

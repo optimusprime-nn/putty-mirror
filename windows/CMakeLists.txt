@@ -114,6 +114,22 @@ target_link_libraries(putty
 set_target_properties(putty PROPERTIES WIN32_EXECUTABLE ON)
 installed_program(putty)
 
+add_executable(puttydeck
+  window.c
+  putty.c
+  help.c
+  deck.c
+  ${CMAKE_SOURCE_DIR}/stubs/no-console.c
+  putty.rc)
+target_compile_definitions(puttydeck PRIVATE PUTTYDECK)
+be_list(puttydeck PuTTY SSH SERIAL OTHERBACKENDS)
+add_dependencies(puttydeck generated_licence_h)
+target_link_libraries(puttydeck
+  guiterminal guimisc eventloop sshclient otherbackends settings network crypto
+  utils
+  ${platform_libraries})
+set_target_properties(puttydeck PROPERTIES WIN32_EXECUTABLE ON)
+
 add_executable(puttytel
   window.c
   putty.c
