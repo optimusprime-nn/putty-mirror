@@ -27,8 +27,8 @@ pre-releases on the website:
    add a news announcement in components/news. (Previous naming
    convention has been to name it in the form 'X.YZ-pre.mi'.)
 
- - Optionally: write an announcement email for the availability of
-   pre-releases, and send it out to <putty-announce@lists.tartarus.org>.
+ - Optionally: write an announcement of the availability of
+   pre-releases, and include it in the announcements RSS feed.
 
 Things to do during the branch-stabilisation period:
 
@@ -142,6 +142,7 @@ Making a release candidate build
        + test-build with -DNOT_X_WINDOWS (compile flag)
        + test-build with -DPUTTY_GSSAPI=OFF (cmake flag)
        + test-build with -DPUTTY_IPV6=OFF (cmake flag)
+       + test-build with -DJUST_USE_GTK_CLIPBOARD_UTF8 (compile flag)
     * test that the Windows source builds with Visual Studio (just in
       case there's an unguarded clangism that would prevent it)
     * quick check of the outlying network protocols (Telnet, SUPDUP
@@ -290,18 +291,11 @@ entries etc, this is the procedure for putting it all up on the web.
       time) to submit that to the actual upload process
 
  - Announce the release!
-    + Construct a release announcement email whose message body is the
-      announcement written above, and which includes the following
-      headers:
-       * Reply-To: <putty@projects.tartarus.org>
-       * Subject: PuTTY X.YZ is released
-    + Mail that announcement to <putty-announce@lists.tartarus.org>
-       * but first, remember to enable the 'allow-putty-announce' flag
-         in mailfilter so that it won't be rejected. Then turn that
-         flag back off once the post has appeared in the list archive.
-    + Post it to comp.security.ssh.
+    + Make a plain-text version of the announcement HTML used in the
+      RSS release announcement feed.
+    + Post that text announcement to comp.security.ssh.
     + Post the prepared toot to Mastodon.
-    + Mention it in <TDHTT> on mono.
+    + Mention the release in <TDHTT> on mono.
 
  - Edit the master ~/adm/puttysnap.sh to disable pre-release builds,
    if they were previously enabled.
