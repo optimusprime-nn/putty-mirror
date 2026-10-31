@@ -1,0 +1,13 @@
+# Opens one weekly pull request to puttydeck with newer Rust crates. The Rust
+# tests run on it, so a green pull request is safe to merge.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /rust
+    target-branch: puttydeck
+    schedule:
+      interval: weekly
+    groups:
+      crates:
+        patterns:
+          - '*'

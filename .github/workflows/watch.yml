@@ -1,0 +1,77 @@
+# Runs on Mondays and opens an issue, which GitHub emails to you, when there's
+# something to look at: a security advisory for a Rust crate RustuTTY uses, a
+# new PuTTY release, or new commits in PuTTY. It lives here because GitHub only
+# runs scheduled workflows from the default branch. RustuTTY is on puttydeck.
+name: Watch for updates
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  UPSTREAM: https://git.tartarus.org/simon/putty.git
+  # The PuTTY version RustuTTY was written from
+  PUTTY_BASE: '0.85'
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: puttydeck
+      - run: cargo install cargo-audit --locked
+      - name: Check the crates for security advisories
+        working-directory: rust
+        run: |
+          title="Security advisory in a RustuTTY dependency"
+          open=$(gh issue list --state open --limit 200 --json number,title --jq ".[] | select(.title == \"$title\") | .number")
+          if cargo audit --color never > ../audit.txt 2>&1; then
+            for n in $open; do
+              gh issue close "$n" --comment "cargo audit is clean again."
+            done
+          else
+            cat ../audit.txt
+            if [ -z "$open" ]; then
+              { echo "\`cargo audit\` found a problem. Update the crate in \`rust/Cargo.lock\` on the puttydeck branch."; echo; echo '```'; tail -c 60000 ../audit.txt; echo '```'; } > ../body.md
+              gh issue create --title "$title" --body-file ../body.md
+            fi
+          fi
+
+  putty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: puttydeck
+          fetch-depth: 0
+      - name: Check for a new PuTTY release
+        run: |
+          tag=$(git ls-remote --tags "$UPSTREAM" | sed -n 's|.*refs/tags/\([0-9][0-9.]*\)$|\1|p' | sort -V | tail -1)
+          echo "Latest PuTTY release: $tag"
+          title="PuTTY $tag released"
+          newest=$(printf '%s\n%s\n' "$tag" "$PUTTY_BASE" | sort -V | tail -1)
+          seen=$(gh issue list --state all --limit 500 --json title --jq ".[] | select(.title == \"$title\") | .title")
+          if [ "$tag" != "$PUTTY_BASE" ] && [ "$newest" = "$tag" ] && [ -z "$seen" ]; then
+            printf 'RustuTTY was written from PuTTY %s.\n\nRead the changes and decide what to bring over: https://www.chiark.greenend.org.uk/~sgtatham/putty/changes.html\n\nCheck the security fixes first. RustuTTY shares no code with PuTTY, so they often will not apply, but each is worth a look. Any new saved settings go in `rust/crates/deck-core/tests/putty_keywords.txt`.\n' "$PUTTY_BASE" > body.md
+            gh issue create --title "$title" --body-file body.md
+          fi
+      - name: Check for new PuTTY commits
+        run: |
+          git fetch --quiet "$UPSTREAM" main
+          head=$(git rev-parse --short FETCH_HEAD)
+          count=$(git rev-list --count HEAD..FETCH_HEAD)
+          echo "$count PuTTY commits are not merged here"
+          title="New PuTTY commits, up to $head"
+          seen=$(gh issue list --state all --limit 500 --json title --jq ".[] | select(.title == \"$title\") | .title")
+          if [ "$count" != 0 ] && [ -z "$seen" ]; then
+            { echo "$count commits in PuTTY aren't merged into puttydeck. Merging them updates the C code only: anything RustuTTY needs has to be rewritten in Rust."; echo; echo '```'; git log --no-merges --format='%h %s' HEAD..FETCH_HEAD | head -50; echo '```'; } > body.md
+            gh issue create --title "$title" --body-file body.md
+          fi
