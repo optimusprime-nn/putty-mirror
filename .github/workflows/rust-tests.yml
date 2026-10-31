@@ -1,0 +1,29 @@
+name: Rust tests
+
+on:
+  push:
+    branches: [puttydeck]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-tests.yml'
+  pull_request:
+    branches: [puttydeck]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core and tools
+        run: cargo test -p deck-core -p deck-tools --no-fail-fast
+      - name: Window
+        run: cargo test -p rustutty --features test-hooks
