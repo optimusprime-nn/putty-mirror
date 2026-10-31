@@ -1,0 +1,44 @@
+[package]
+name = "puttydeck"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# Builds a copy that tests can drive: a private clipboard, no registry, and no
+# focus stealing. Never shipped.
+test-hooks = []
+
+[build-dependencies]
+embed-resource = "3"
+
+[dependencies]
+deck-core = { path = "../deck-core" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Media",
+    "Win32_Media_Audio",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[[test]]
+name = "app"
+required-features = ["test-hooks"]
+
+[dev-dependencies]
+rand = "0.10"
+russh-sftp = "3"
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }

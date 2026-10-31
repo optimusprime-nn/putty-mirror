@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/deck-core", "crates/deck-setup", "crates/deck-tools", "crates/puttydeck"]
+
+[profile.release]
+lto = "thin"
+panic = "abort"
+
+# RSA and key exchange are far too slow unoptimised, even in tests
+[profile.dev.package."*"]
+opt-level = 2

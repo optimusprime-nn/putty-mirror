@@ -1,0 +1,6 @@
+# Link the C runtime statically, so nothing else has to be on the target PC.
+[target.x86_64-pc-windows-msvc]
+# The DLLs a program links against come from System32 only, never from beside
+# it, so a planted DLL next to a copy in Downloads can't be loaded.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/DEPENDENTLOADFLAG:0x800"]
+

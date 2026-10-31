@@ -1,0 +1,54 @@
+[package]
+name = "deck-tools"
+version = "0.1.0"
+edition = "2021"
+description = "Rust versions of PuTTY's command line tools"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "plink"
+path = "src/bin/plink.rs"
+
+[[bin]]
+name = "pscp"
+path = "src/bin/pscp.rs"
+
+[[bin]]
+name = "psftp"
+path = "src/bin/psftp.rs"
+
+[[bin]]
+name = "puttygen"
+path = "src/bin/puttygen.rs"
+
+[[bin]]
+name = "pageant"
+path = "src/bin/pageant.rs"
+
+[dependencies]
+zeroize = "1"
+anyhow = "1"
+deck-core = { path = "../deck-core" }
+futures = "0.3"
+rand = "0.10"
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "3"
+tokio = { version = "1", features = ["fs", "io-util", "io-std", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+]
+
