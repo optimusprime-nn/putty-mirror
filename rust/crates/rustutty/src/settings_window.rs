@@ -158,12 +158,12 @@ pub fn edit(owner: HWND, font: HFONT, name: &str, settings: Settings) -> (Outcom
             hInstance: instance,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as *mut _),
-            lpszClassName: w!("PuTTYDeckSettings"),
+            lpszClassName: w!("RustuTTYSettings"),
             ..Default::default()
         });
         let Ok(hwnd) = CreateWindowExW(
             if test { WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW } else { WS_EX_DLGMODALFRAME },
-            w!("PuTTYDeckSettings"),
+            w!("RustuTTYSettings"),
             w!("Session settings"),
             WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
             if test { -4000 } else { CW_USEDEFAULT }, CW_USEDEFAULT, scaled(WIDTH, dpi), scaled(HEIGHT, dpi),
@@ -242,7 +242,7 @@ pub fn edit(owner: HWND, font: HFONT, name: &str, settings: Settings) -> (Outcom
         let _ = EnableWindow(owner, true);
         let _ = DestroyWindow(hwnd);
         WINDOW = std::ptr::null_mut();
-        let _ = UnregisterClassW(w!("PuTTYDeckSettings"), Some(instance));
+        let _ = UnregisterClassW(w!("RustuTTYSettings"), Some(instance));
         (window.outcome.unwrap_or(Outcome::Cancelled), new_name, window.settings)
     }
 }

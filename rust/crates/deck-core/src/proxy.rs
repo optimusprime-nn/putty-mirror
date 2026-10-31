@@ -217,7 +217,7 @@ async fn socks5(c: &mut TcpStream, target: &Target, user: &str, pass: &str) -> a
             c.read_exact(&mut status).await?;
             anyhow::ensure!(status[1] == 0, "The SOCKS 5 proxy rejected the username or password.");
         }
-        _ => anyhow::bail!("The SOCKS 5 proxy offers no login method PuTTYDeck supports."),
+        _ => anyhow::bail!("The SOCKS 5 proxy offers no login method RustuTTY supports."),
     }
     let mut msg = vec![5, 1, 0];
     match target.host.parse::<IpAddr>() {

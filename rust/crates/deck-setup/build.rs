@@ -9,6 +9,6 @@ fn main() {
     if let Ok(exe) = std::env::var("DECK_EXE") {
         println!("cargo:rerun-if-changed={exe}");
     }
-    println!("cargo:rerun-if-changed=../puttydeck/assets");
-    embed_resource::compile("../puttydeck/assets/deck.rc", embed_resource::NONE).manifest_required().unwrap();
+    println!("cargo:rerun-if-changed=../rustutty/assets");
+    embed_resource::compile("../rustutty/assets/deck.rc", embed_resource::NONE).manifest_required().unwrap();
 }

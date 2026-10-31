@@ -1,4 +1,4 @@
-# PuTTYDeck (Rust)
+# RustuTTY
 
 PuTTY's programs rewritten in Rust, with terminal sessions in one window, listed
 on the left. Every session runs inside one process. SSH and its cryptography come
@@ -8,7 +8,7 @@ is written here, following PuTTY's source and file formats.
 
 | PuTTY | Here | Notes |
 | --- | --- | --- |
-| PuTTY | `puttydeck` | Windows program, many sessions in one window |
+| PuTTY | `rustutty` | Windows program, many sessions in one window |
 | Plink | `plink` | Console sessions, scripts and tunnels |
 | PSCP | `pscp` | SFTP, or the old SCP protocol with `-scp` or when there's no SFTP |
 | PSFTP | `psftp` | Interactive, or `-b` for a batch file |
@@ -27,9 +27,9 @@ make a new one. `telnet://host`, `rlogin://host`, `supdup://host`, `raw://host:p
 and `serial://COM3` also work. Login prompts appear in the terminal, as they do
 in PuTTY.
 
-    puttydeck -ssh user@host
-    puttydeck -load "saved session"
-    puttydeck -i key.ppk -L 8080:web:80 -D 1080 user@host
+    rustutty -ssh user@host
+    rustutty -load "saved session"
+    rustutty -i key.ppk -L 8080:web:80 -D 1080 user@host
 
 ### Copy and paste
 
@@ -128,7 +128,7 @@ SmartScreen may warn about it on another PC.
 ## Testing
 
     cargo test -p deck-core -p deck-tools
-    cargo test -p puttydeck --features test-hooks
+    cargo test -p rustutty --features test-hooks
     cargo test -p deck-core --test sftp -- --ignored --test-threads=1
 
 The first two run real servers on localhost. The app tests drive a special build
@@ -139,7 +139,8 @@ tools built, and no Pageant running.
 
 ## Licence
 
-PuTTYDeck follows PuTTY, copyright Simon Tatham and contributors, under the MIT
+RustuTTY is an unofficial program, not connected with the PuTTY project. It
+follows PuTTY, copyright Simon Tatham and contributors, under the MIT
 licence: see `LICENCE`. It is unofficial, and not a PuTTY project release. russh
 and alacritty_terminal are under the Apache 2.0 licence; before redistributing
 the binaries, include their licence notices.

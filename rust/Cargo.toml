@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/deck-core", "crates/deck-setup", "crates/deck-tools", "crates/puttydeck"]
+members = ["crates/deck-core", "crates/deck-setup", "crates/deck-tools", "crates/rustutty"]
 
 [profile.release]
 lto = "thin"

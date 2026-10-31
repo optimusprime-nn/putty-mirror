@@ -1633,19 +1633,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "puttydeck"
-version = "0.1.0"
-dependencies = [
- "deck-core",
- "embed-resource",
- "rand",
- "russh",
- "russh-sftp",
- "tokio",
- "windows",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1899,6 +1886,19 @@ dependencies = [
  "errno",
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "rustutty"
+version = "0.1.0"
+dependencies = [
+ "deck-core",
+ "embed-resource",
+ "rand",
+ "russh",
+ "russh-sftp",
+ "tokio",
+ "windows",
 ]
 
 [[package]]

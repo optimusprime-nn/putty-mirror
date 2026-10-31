@@ -1,5 +1,5 @@
-//! Connection targets, and saved sessions. PuTTY's own are only read: PuTTYDeck
-//! never changes PuTTY's settings. A session saved here goes in PuTTYDeck's own
+//! Connection targets, and saved sessions. PuTTY's own are only read: RustuTTY
+//! never changes PuTTY's settings. A session saved here goes in RustuTTY's own
 //! key, and takes the place of a PuTTY session of the same name.
 
 use crate::settings::{Settings, Value};
@@ -12,7 +12,7 @@ pub enum Protocol {
     Rlogin,
     Supdup,
     Serial,
-    /// A protocol neither PuTTY nor PuTTYDeck knows, kept so it can be refused by name.
+    /// A protocol neither PuTTY nor RustuTTY knows, kept so it can be refused by name.
     Unsupported(String),
 }
 
@@ -127,7 +127,7 @@ pub fn target_from(settings: Settings) -> Target {
     if host.is_empty() {
         t.refuse = Some("this saved session has no host name".into());
     } else if let Protocol::Unsupported(p) = &t.protocol {
-        t.refuse = Some(format!("PuTTYDeck doesn't support the {p} protocol"));
+        t.refuse = Some(format!("RustuTTY doesn't support the {p} protocol"));
     }
     t
 }
@@ -182,6 +182,7 @@ pub fn escape_key(s: &str) -> String {
 #[cfg(windows)]
 pub const PUTTY_KEY: &str = r"Software\SimonTatham\PuTTY";
 #[cfg(windows)]
+// The program's earlier name: changing it would lose saved sessions and host keys.
 pub const DECK_KEY: &str = r"Software\PuTTYDeck";
 
 /// Saved session names and settings, sorted, without "Default Settings".
@@ -197,7 +198,7 @@ pub fn load_sessions() -> Vec<(String, Target)> {
     all
 }
 
-/// Saves a session in PuTTYDeck's key. Text and numbers keep PuTTY's types.
+/// Saves a session in RustuTTY's key. Text and numbers keep PuTTY's types.
 #[cfg(windows)]
 pub fn save_session(name: &str, settings: &Settings) -> anyhow::Result<()> {
     use winreg::{enums::*, RegKey};

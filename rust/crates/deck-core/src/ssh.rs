@@ -132,7 +132,7 @@ impl client::Handler for Client {
         match key {
             PublicKeyOrCertificate::PublicKey { key, .. } => self.accept(key).await,
             PublicKeyOrCertificate::Certificate(_) => {
-                self.say("This host presented a certificate, which PuTTYDeck doesn't support.\n");
+                self.say("This host presented a certificate, which RustuTTY doesn't support.\n");
                 Ok(false)
             }
         }
@@ -550,7 +550,7 @@ async fn authenticate(handle: &mut Handle<Client>, io: &Arc<Mutex<Io>>, target: 
                 return Ok(());
             }
         } else {
-            anyhow::bail!("The server offers no login method PuTTYDeck supports.");
+            anyhow::bail!("The server offers no login method RustuTTY supports.");
         }
         io.say("Access denied\n");
     }
@@ -591,7 +591,7 @@ fn log_host(value: &str, port: u16) -> (String, u16) {
 /// file transfers and proxies never offer the server a way to Pageant.
 async fn login(target: &Target, store: Arc<dyn HostKeyStore>, io: Arc<Mutex<Io>>, x11: Option<X11>, full: bool) -> anyhow::Result<Handle<Client>> {
     let s = &target.settings;
-    anyhow::ensure!(s.i("SshProt", 3) != 0, "This session is set to SSH-1 only, which PuTTYDeck doesn't support.");
+    anyhow::ensure!(s.i("SshProt", 3) != 0, "This session is set to SSH-1 only, which RustuTTY doesn't support.");
     let events = io.lock().await.events.clone();
     let logical = s.s("LogHost", "");
     let (key_host, key_port) = if logical.is_empty() { (target.host.clone(), target.port) } else { log_host(&logical, target.port) };

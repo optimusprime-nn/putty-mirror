@@ -1,4 +1,4 @@
-//! Drives a real PuTTYDeck window. The build under test uses a private clipboard
+//! Drives a real RustuTTY window. The build under test uses a private clipboard
 //! and never takes focus, and everything here is addressed to that process's
 //! own windows, so it can run while someone is using the PC.
 
@@ -138,7 +138,7 @@ fn window_of(pid: u32) -> Option<HWND> {
     all.into_iter().map(|h| HWND(h as *mut _)).find(|&h| {
         let mut p = 0;
         unsafe { GetWindowThreadProcessId(h, Some(&mut p)) };
-        p == pid && class_of(h) == "PuTTYDeckMain"
+        p == pid && class_of(h) == "RustuTTYMain"
     })
 }
 
@@ -152,12 +152,12 @@ fn children(h: HWND) -> Vec<HWND> {
 
 impl App {
     fn start(args: &[String]) -> App {
-        let dir = std::env::temp_dir().join(format!("puttydeck-test-{}-{}", std::process::id(), rand_tag()));
+        let dir = std::env::temp_dir().join(format!("rustutty-test-{}-{}", std::process::id(), rand_tag()));
         std::fs::create_dir_all(&dir).unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_puttydeck"))
+        let child = Command::new(env!("CARGO_BIN_EXE_rustutty"))
             .args(args)
-            .env("PUTTYDECK_TEST_DUMP", dir.join("dump.txt"))
-            .env("PUTTYDECK_TEST_CLIP", dir.join("clip.txt"))
+            .env("RUSTUTTY_TEST_DUMP", dir.join("dump.txt"))
+            .env("RUSTUTTY_TEST_CLIP", dir.join("clip.txt"))
             .spawn()
             .unwrap();
         let end = Instant::now() + Duration::from_secs(10);
@@ -172,7 +172,7 @@ impl App {
         let (content, edit) = loop {
             let kids = children(main);
             let find = |c: &str| kids.iter().find(|&&h| class_of(h) == c).copied();
-            if let (Some(c), Some(e), true) = (find("PuTTYDeckContent"), find("Edit"), kids.len() >= 11) {
+            if let (Some(c), Some(e), true) = (find("RustuTTYContent"), find("Edit"), kids.len() >= 11) {
                 break (c, e);
             }
             assert!(Instant::now() < end, "controls never appeared");
@@ -503,11 +503,11 @@ async fn typing_into_a_prompt_is_not_lost_when_keys_come_fast() {
     app.sees("tester@127.0.0.1's password:").await;
 }
 
-/// Run by hand: renders the off-screen window to PUTTYDECK_SHOT to look at.
+/// Run by hand: renders the off-screen window to RUSTUTTY_SHOT to look at.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn screenshot() {
-    let path = std::env::var("PUTTYDECK_SHOT").unwrap();
+    let path = std::env::var("RUSTUTTY_SHOT").unwrap();
     let p = Peer::start().await;
     let app = App::start(&raw_args(p.port));
     p.connected(1).await;

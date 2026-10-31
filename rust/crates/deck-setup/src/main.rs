@@ -1,4 +1,4 @@
-//! Installer and uninstaller for PuTTYDeck. The files to install are embedded,
+//! Installer and uninstaller for RustuTTY. The files to install are embedded,
 //! so setup is a single program. It installs for the current user only, needing
 //! no administrator rights, and copies itself in to serve as the uninstaller.
 //!
@@ -34,8 +34,8 @@ const TOOLS: [(&str, &[u8]); 5] = [
     ("pageant.exe", include_bytes!(concat!(env!("DECK_TOOLS"), "/pageant.exe"))),
 ];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PuTTYDeck";
-const APP_ID: &str = "PuTTYDeck";
+const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RustuTTY";
+const APP_ID: &str = "RustuTTY";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 // PKEY_AppUserModel_ID
 const APP_ID_KEY: PROPERTYKEY = PROPERTYKEY {
@@ -49,7 +49,7 @@ struct Setup {
 
 impl Setup {
     fn ask(&self, text: &str, style: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
-        unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("PuTTYDeck Setup"), style | MB_SETFOREGROUND) }
+        unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("RustuTTY Setup"), style | MB_SETFOREGROUND) }
     }
 
     fn complain(&self, text: &str) {
@@ -63,10 +63,10 @@ impl Setup {
             self.complain("Could not find where to install.");
             return 1;
         };
-        let (exe, licence, uninstaller) = (dir.join("puttydeck.exe"), dir.join("LICENCE.txt"), dir.join("uninstall.exe"));
+        let (exe, licence, uninstaller) = (dir.join("rustutty.exe"), dir.join("LICENCE.txt"), dir.join("uninstall.exe"));
         if !self.silent {
             let text = format!(
-                "Install PuTTYDeck {VERSION} for this user?\n\nFolder: {}\n\nYour saved PuTTY sessions are not changed.",
+                "Install RustuTTY {VERSION} for this user?\n\nFolder: {}\n\nYour saved PuTTY sessions are not changed.",
                 dir.display()
             );
             if self.ask(&text, MB_YESNO | MB_ICONQUESTION) != IDYES {
@@ -80,7 +80,7 @@ impl Setup {
         // A running copy can't be overwritten, and this fails before anything
         // has changed, so an upgrade is all or nothing.
         if std::fs::write(&exe, EXE).is_err() {
-            self.complain("Could not write puttydeck.exe.\n\nIf PuTTYDeck is running, close it and try again.");
+            self.complain("Could not write rustutty.exe.\n\nIf RustuTTY is running, close it and try again.");
             return 1;
         }
         let rest = (|| -> Result<(), String> {
@@ -97,7 +97,7 @@ impl Setup {
             self.complain(&format!("Installation did not finish.\n\n{why}"));
             return 1;
         }
-        if !self.silent && self.ask("PuTTYDeck is installed. Start it now?", MB_YESNO | MB_ICONINFORMATION) == IDYES {
+        if !self.silent && self.ask("RustuTTY is installed. Start it now?", MB_YESNO | MB_ICONINFORMATION) == IDYES {
             let _ = std::process::Command::new(&exe).current_dir(&dir).spawn();
         }
         0
@@ -108,12 +108,12 @@ impl Setup {
             self.complain("Could not find the install folder.");
             return 1;
         };
-        if !self.silent && self.ask("Remove PuTTYDeck?\n\nYour saved PuTTY sessions are kept.", MB_YESNO | MB_ICONQUESTION) != IDYES {
+        if !self.silent && self.ask("Remove RustuTTY?\n\nYour saved PuTTY sessions are kept.", MB_YESNO | MB_ICONQUESTION) != IDYES {
             return 2;
         }
-        if let Err(e) = std::fs::remove_file(dir.join("puttydeck.exe")) {
+        if let Err(e) = std::fs::remove_file(dir.join("rustutty.exe")) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                self.complain("Could not remove puttydeck.exe.\n\nIf PuTTYDeck is running, close it and try again.");
+                self.complain("Could not remove rustutty.exe.\n\nIf RustuTTY is running, close it and try again.");
                 return 1;
             }
         }
@@ -124,7 +124,7 @@ impl Setup {
         let _ = std::fs::remove_file(lnk);
         let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey(UNINSTALL_KEY);
         if !self.silent {
-            self.ask("PuTTYDeck has been removed.", MB_OK | MB_ICONINFORMATION);
+            self.ask("RustuTTY has been removed.", MB_OK | MB_ICONINFORMATION);
         }
         // This has to be the very last thing done: the deletion only works
         // once this program has exited, and it waits a fixed time for that.
@@ -143,11 +143,11 @@ fn known_folder(id: &GUID, flags: KNOWN_FOLDER_FLAG) -> Option<PathBuf> {
 }
 
 fn install_dir() -> Option<PathBuf> {
-    Some(known_folder(&FOLDERID_UserProgramFiles, KF_FLAG_CREATE)?.join("PuTTYDeck"))
+    Some(known_folder(&FOLDERID_UserProgramFiles, KF_FLAG_CREATE)?.join("RustuTTY"))
 }
 
 fn shortcut_path() -> Option<PathBuf> {
-    Some(known_folder(&FOLDERID_Programs, KF_FLAG_DEFAULT)?.join("PuTTYDeck.lnk"))
+    Some(known_folder(&FOLDERID_Programs, KF_FLAG_DEFAULT)?.join("RustuTTY.lnk"))
 }
 
 fn make_shortcut(lnk: &Path, exe: &Path, dir: &Path) -> windows::core::Result<()> {
@@ -168,7 +168,7 @@ fn make_shortcut(lnk: &Path, exe: &Path, dir: &Path) -> windows::core::Result<()
 
 fn register(dir: &Path, exe: &Path, uninstaller: &Path) -> std::io::Result<()> {
     let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey_with_flags(UNINSTALL_KEY, KEY_SET_VALUE)?;
-    key.set_value("DisplayName", &"PuTTYDeck")?;
+    key.set_value("DisplayName", &"RustuTTY")?;
     key.set_value("DisplayVersion", &VERSION)?;
     key.set_value("DisplayIcon", &exe.display().to_string())?;
     key.set_value("InstallLocation", &dir.display().to_string())?;

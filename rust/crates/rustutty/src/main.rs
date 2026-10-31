@@ -1,4 +1,4 @@
-//! PuTTYDeck: terminal sessions in one window, listed down the left.
+//! RustuTTY: terminal sessions in one window, listed down the left.
 #![cfg_attr(all(not(debug_assertions), not(feature = "test-hooks")), windows_subsystem = "windows")]
 
 mod clipboard;
@@ -531,8 +531,8 @@ impl Deck {
             let sel = self.active.map_or(usize::MAX, |i| i);
             SendMessageW(self.list, LB_SETCURSEL, Some(WPARAM(sel)), None);
             let title = match self.active.and_then(|i| self.sessions.get(i)) {
-                Some(s) => format!("{} - PuTTYDeck", s.label()),
-                None => "PuTTYDeck".to_string(),
+                Some(s) => format!("{} - RustuTTY", s.label()),
+                None => "RustuTTY".to_string(),
             };
             let _ = SetWindowTextW(self.main, PCWSTR(wide(&title).as_ptr()));
         }
@@ -787,7 +787,7 @@ impl Deck {
         if cfg!(feature = "test-hooks") {
             return true;
         }
-        let r = unsafe { MessageBoxW(Some(self.main), PCWSTR(wide(text).as_ptr()), w!("PuTTYDeck"), MB_YESNO | MB_ICONQUESTION) };
+        let r = unsafe { MessageBoxW(Some(self.main), PCWSTR(wide(text).as_ptr()), w!("RustuTTY"), MB_YESNO | MB_ICONQUESTION) };
         r == IDYES
     }
 
@@ -1297,7 +1297,7 @@ impl Deck {
 
     #[cfg(feature = "test-hooks")]
     fn dump(&mut self) {
-        let Ok(path) = std::env::var("PUTTYDECK_TEST_DUMP") else { return };
+        let Ok(path) = std::env::var("RUSTUTTY_TEST_DUMP") else { return };
         let (cols, rows) = self.grid();
         let mut out = format!("sessions={}\nactive={:?}\ngrid={cols}x{rows}\n", self.sessions.len(), self.active);
         for (i, s) in self.sessions.iter().enumerate() {
@@ -1335,7 +1335,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_CLOSE => {
             let warn = |s: &&Session| !s.closed && s.target.settings.b("WarnOnClose", true);
             let live = d.sessions.iter().filter(warn).count();
-            if live == 0 || d.confirm(&format!("Close PuTTYDeck and its {live} open sessions?")) {
+            if live == 0 || d.confirm(&format!("Close RustuTTY and its {live} open sessions?")) {
                 let _ = DestroyWindow(hwnd);
             }
         }
@@ -1364,7 +1364,7 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         #[cfg(feature = "test-hooks")]
         WM_TEST_CLIP => {
-            if let Ok(p) = std::env::var("PUTTYDECK_TEST_CLIP") {
+            if let Ok(p) = std::env::var("RUSTUTTY_TEST_CLIP") {
                 clipboard::set(&std::fs::read_to_string(p).unwrap_or_default());
             }
         }
@@ -1557,7 +1557,7 @@ fn main() {
             hInstance: instance,
             hCursor: arrow,
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as *mut _),
-            lpszClassName: w!("PuTTYDeckMain"),
+            lpszClassName: w!("RustuTTYMain"),
             ..Default::default()
         });
         RegisterClassW(&WNDCLASSW {
@@ -1565,20 +1565,20 @@ fn main() {
             lpfnWndProc: Some(content_proc),
             hInstance: instance,
             hCursor: cursor,
-            lpszClassName: w!("PuTTYDeckContent"),
+            lpszClassName: w!("RustuTTYContent"),
             ..Default::default()
         });
         // Test windows open off-screen, so they don't flash up over someone's work.
         let x = if cfg!(feature = "test-hooks") { -4000 } else { CW_USEDEFAULT };
         let ex = if cfg!(feature = "test-hooks") { WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW } else { WINDOW_EX_STYLE(0) };
-        let main = CreateWindowExW(ex, w!("PuTTYDeckMain"), w!("PuTTYDeck"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        let main = CreateWindowExW(ex, w!("RustuTTYMain"), w!("RustuTTY"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             x, CW_USEDEFAULT, 1200, 760, None, None, Some(instance), None).unwrap();
         let child = |class: PCWSTR, text: PCWSTR, style: u32, ex: u32, id: usize| {
             CreateWindowExW(WINDOW_EX_STYLE(ex), class, text, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style), 0, 0, 10, 10,
                 Some(main), Some(HMENU(id as *mut _)), Some(instance), None).unwrap()
         };
         let listbox = (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32 | WS_VSCROLL.0 | WS_TABSTOP.0;
-        let content = child(w!("PuTTYDeckContent"), w!(""), WS_VSCROLL.0, 0, 0);
+        let content = child(w!("RustuTTYContent"), w!(""), WS_VSCROLL.0, 0, 0);
         let edit = child(w!("EDIT"), w!(""), ES_AUTOHSCROLL as u32 | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, 99);
         let _ = SendMessageW(edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(w!("user@host").as_ptr() as isize)));
         let open = child(w!("BUTTON"), w!("Open"), BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 0, ID_OPEN);
