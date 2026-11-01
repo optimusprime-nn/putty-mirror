@@ -22,7 +22,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT};
 use windows::Win32::System::Diagnostics::Debug::{Beep, MessageBeep};
-use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar};
+use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar, DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -43,6 +43,8 @@ const WM_TEST_SETTINGS: u32 = WM_APP + 0x13;
 const MAX_PRINT_JOB: usize = 64 << 20;
 const ID_OPEN: usize = 100;
 const ID_LIST: usize = 101;
+/// Width of the close box at the end of an open session's row.
+const CLOSE_BOX: i32 = 22;
 const ID_SAVED: usize = 102;
 const ID_COPY: usize = 103;
 const ID_PASTE: usize = 104;
@@ -132,6 +134,8 @@ struct Deck {
     compose_state: u8,
     compose_first: u8,
     full_screen: Option<(WINDOWPLACEMENT, i32)>,
+    /// The row whose close box is held down.
+    close_held: Option<usize>,
 }
 
 static DECK: AtomicPtr<Deck> = AtomicPtr::new(std::ptr::null_mut());
@@ -291,6 +295,9 @@ impl Deck {
             let all = self.labels.iter().chain(&self.buttons).chain([&self.edit, &self.open, &self.list, &self.saved_list]);
             for &h in all {
                 SendMessageW(h, WM_SETFONT, Some(WPARAM(self.gui_font.0 as usize)), Some(LPARAM(1)));
+            }
+            for h in [self.list, self.saved_list] {
+                SendMessageW(h, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.px(21) as isize)));
             }
         }
     }
@@ -624,6 +631,14 @@ impl Deck {
             let a = self.active.unwrap_or(0);
             let a = if a > i { a - 1 } else { a };
             self.select(a.min(self.sessions.len() - 1));
+        }
+    }
+
+    /// A stray click can reach the close box, so it minds `WarnOnClose`.
+    fn close_from_list(&mut self, i: usize) {
+        let warn = self.sessions.get(i).is_some_and(|s| !s.closed && s.target.settings.b("WarnOnClose", true));
+        if !warn || self.confirm(&format!("Close {}?", self.sessions[i].label())) {
+            self.close_session(i);
         }
     }
 
@@ -1156,6 +1171,60 @@ impl Deck {
         ((r >> 16) == 0).then_some((r & 0xffff) as usize)
     }
 
+    /// The row whose close box is at this point in the open sessions list.
+    fn close_box_at(&self, lp: LPARAM) -> Option<usize> {
+        let mut r = RECT::default();
+        let _ = unsafe { GetClientRect(self.list, &mut r) };
+        let x = (lp.0 & 0xffff) as i16 as i32;
+        (x >= r.right - self.px(CLOSE_BOX)).then(|| self.row_from_point(self.list, lp)).flatten()
+    }
+
+    /// Clicks on a close box. Returns true if the list shouldn't see this message.
+    fn close_click(&mut self, msg: u32, lp: LPARAM) -> bool {
+        let at = self.close_box_at(lp);
+        if msg == WM_LBUTTONUP {
+            let held = self.close_held.take();
+            if let (Some(i), true) = (held, held == at) {
+                self.close_from_list(i);
+            }
+            return held.is_some();
+        }
+        self.close_held = at;
+        at.is_some()
+    }
+
+    fn draw_session_row(&self, item: &DRAWITEMSTRUCT) {
+        let Some(s) = self.sessions.get(item.itemID as usize) else { return };
+        let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+        let (back, fore) = if selected { (COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT) } else { (COLOR_WINDOW, COLOR_WINDOWTEXT) };
+        let dc = item.hDC;
+        let r = item.rcItem;
+        unsafe {
+            FillRect(dc, &r, GetSysColorBrush(back));
+            let colour = COLORREF(GetSysColor(fore));
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, colour);
+            let old_font = SelectObject(dc, self.gui_font.into());
+            let mut text: Vec<u16> = s.label().encode_utf16().collect();
+            let mut area = RECT { left: r.left + self.px(3), right: r.right - self.px(CLOSE_BOX), ..r };
+            DrawTextW(dc, &mut text, &mut area, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+            SelectObject(dc, old_font);
+
+            let pen = CreatePen(PS_SOLID, self.px(1).max(1), colour);
+            let old_pen = SelectObject(dc, pen.into());
+            let (x, y, arm) = (r.right - self.px(CLOSE_BOX) / 2, (r.top + r.bottom) / 2, self.px(4));
+            for (from, to) in [(-arm, arm + 1), (arm, -arm - 1)] {
+                let _ = MoveToEx(dc, x + from, y - arm, None);
+                let _ = LineTo(dc, x + to, y + arm + 1);
+            }
+            SelectObject(dc, old_pen);
+            let _ = DeleteObject(pen.into());
+            if item.itemState.0 & ODS_FOCUS.0 != 0 {
+                let _ = DrawFocusRect(dc, &r);
+            }
+        }
+    }
+
     fn session_menu(&mut self, i: usize) {
         self.select(i);
         unsafe {
@@ -1325,6 +1394,10 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             take_focus(d.content);
         }
         WM_COMMAND => d.command(wp.0 & 0xffff, (wp.0 >> 16) as u32 & 0xffff),
+        WM_DRAWITEM if wp.0 == ID_LIST => {
+            d.draw_session_row(&*(lp.0 as *const DRAWITEMSTRUCT));
+            return LRESULT(1);
+        }
         WM_DECK_EVENT => d.pump_events(),
         WM_DPICHANGED => {
             d.dpi = (wp.0 & 0xffff) as u32;
@@ -1555,6 +1628,7 @@ fn main() {
         RegisterClassW(&WNDCLASSW {
             lpfnWndProc: Some(main_proc),
             hInstance: instance,
+            hIcon: LoadIconW(Some(instance), PCWSTR(1 as *const u16)).unwrap_or_default(),
             hCursor: arrow,
             hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as *mut _),
             lpszClassName: w!("RustuTTYMain"),
@@ -1583,7 +1657,7 @@ fn main() {
         let _ = SendMessageW(edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(w!("user@host").as_ptr() as isize)));
         let open = child(w!("BUTTON"), w!("Open"), BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 0, ID_OPEN);
         let l1 = child(w!("STATIC"), w!("Open sessions"), 0, 0, 0);
-        let list = child(w!("LISTBOX"), w!(""), listbox, WS_EX_CLIENTEDGE.0, ID_LIST);
+        let list = child(w!("LISTBOX"), w!(""), listbox | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32, WS_EX_CLIENTEDGE.0, ID_LIST);
         let l2 = child(w!("STATIC"), w!("Saved sessions"), 0, 0, 0);
         let saved_list = child(w!("LISTBOX"), w!(""), listbox, WS_EX_CLIENTEDGE.0, ID_SAVED);
         let buttons = [(w!("Copy"), ID_COPY), (w!("Paste"), ID_PASTE), (w!("Copy all"), ID_COPY_ALL), (w!("Paste to all"), ID_PASTE_ALL), (w!("Settings"), ID_SETTINGS)]
@@ -1601,7 +1675,7 @@ fn main() {
             sessions: Vec::new(), active: None, next_id: 1, saved,
             inbox: Default::default(), rt, store,
             skip_char: false, high_surrogate: None, selecting: false, focused: false,
-            started: std::time::Instant::now(), cursor_off: false, flash: false, pointer_hidden: false, compose_state: 0, compose_first: 0, full_screen: None,
+            started: std::time::Instant::now(), cursor_off: false, flash: false, pointer_hidden: false, compose_state: 0, compose_first: 0, full_screen: None, close_held: None,
         }));
         DECK.store(d, Ordering::Release);
         let d = &mut *d;
@@ -1630,6 +1704,9 @@ fn main() {
                     d.key_down(vk, true, shift_down());
                     continue;
                 }
+            }
+            if msg.hwnd == d.list && matches!(msg.message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP) && d.close_click(msg.message, msg.lParam) {
+                continue;
             }
             if msg.hwnd == d.list && (msg.message == WM_MBUTTONUP || msg.message == WM_RBUTTONUP) {
                 if let Some(i) = d.row_from_point(d.list, msg.lParam) {

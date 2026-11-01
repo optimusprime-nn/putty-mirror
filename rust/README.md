@@ -56,7 +56,8 @@ uses the mouse, hold Shift to select text.
 | `Ctrl+Shift+W` | Close session |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll back and forward |
 
-Right-click a session in the list for more, or middle-click to close it. A bell
+Right-click a session in the list for more. Its X or a middle-click closes it,
+and the X asks first if the session is live and `WarnOnClose` is on. A bell
 in a background session puts a `*` next to it.
 
 ## What's included

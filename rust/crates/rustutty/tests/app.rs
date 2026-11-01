@@ -443,6 +443,36 @@ async fn sessions_close_and_the_deck_goes_with_them() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_close_box_closes_its_own_row_only() {
+    let p = Peer::start().await;
+    let app = App::start(&raw_args(p.port));
+    app.until("first", |d| d.contains("sessions=1")).await;
+    app.open(&format!("raw://127.0.0.1:{}", p.port));
+    app.until("second", |d| d.contains("sessions=2") && d.contains("active=Some(1)")).await;
+
+    assert_ne!(unsafe { GetClassLongPtrW(app.main, GCLP_HICON) }, 0, "the title bar needs an icon");
+    let list = children(app.main).into_iter().find(|&h| class_of(h) == "ListBox").unwrap();
+    let mut r = RECT::default();
+    unsafe { GetClientRect(list, &mut r).unwrap() };
+    let at = |x: i32| x as isize & 0xffff | 8 << 16;
+
+    // A click on the row selects it
+    app.post(list, WM_LBUTTONDOWN, 1, at(20));
+    app.post(list, WM_LBUTTONUP, 0, at(20));
+    app.until("selected", |d| d.contains("sessions=2") && d.contains("active=Some(0)")).await;
+
+    // Pressing the box and letting go elsewhere closes nothing
+    app.post(list, WM_LBUTTONDOWN, 1, at(r.right - 6));
+    app.post(list, WM_LBUTTONUP, 0, at(20));
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(app.dump().contains("sessions=2"));
+
+    app.post(list, WM_LBUTTONDOWN, 1, at(r.right - 6));
+    app.post(list, WM_LBUTTONUP, 0, at(r.right - 6));
+    app.until("closed", |d| d.contains("sessions=1")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_dropped_connection_leaves_the_session_readable() {
     let p = Peer::start().await;
     let app = App::start(&raw_args(p.port));
