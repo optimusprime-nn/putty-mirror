@@ -645,6 +645,42 @@ async fn digest_proxy_login_never_sends_the_password() {
     assert!(!seen.iter().any(|h| h.contains("proxy-secret") || h.contains("Basic")), "{seen:?}");
 }
 
+/// Sends the host's first bytes in the same write as the end of its headers.
+async fn eager_proxy(dest: u16) -> u16 {
+    let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut c, _) = l.accept().await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut b = [0u8; 1];
+            c.read_exact(&mut b).await.unwrap();
+            head.push(b[0]);
+        }
+        let mut far = TcpStream::connect(("127.0.0.1", dest)).await.unwrap();
+        let mut banner = vec![0u8; 4096];
+        let n = far.read(&mut banner).await.unwrap();
+        let mut answer = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+        answer.extend_from_slice(&banner[..n]);
+        c.write_all(&answer).await.unwrap();
+        let _ = tokio::io::copy_bidirectional(&mut c, &mut far).await;
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn data_arriving_with_the_http_proxy_answer_is_kept() {
+    let (port, _) = server::start(new_key(Algorithm::Ed25519), vec![MethodKind::Password]).await;
+    let proxy = eager_proxy(port).await;
+    let via = user_target(port, &[
+        ("ProxyMethod", Value::Int(3)),
+        ("ProxyHost", text("127.0.0.1")),
+        ("ProxyPort", Value::Int(proxy as u32)),
+        ("ProxyLocalhost", Value::Int(1)),
+    ]);
+    logs_in(via).await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_pre_connect_command_runs_first() {
     let dest = upper_server().await;

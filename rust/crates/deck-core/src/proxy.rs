@@ -342,7 +342,7 @@ async fn http_try(c: TcpStream, authority: &str, auth: Option<&str>) -> anyhow::
 
 /// PuTTY's order: ask with no login, then answer the proxy's challenge, which
 /// takes a fresh connection as a proxy may close the first.
-async fn http(host: &str, port: u16, s: &Settings, target: &Target, user: &str, pass: &str, io: &Arc<Mutex<Io>>) -> anyhow::Result<TcpStream> {
+async fn http(host: &str, port: u16, s: &Settings, target: &Target, user: &str, pass: &str, io: &Arc<Mutex<Io>>) -> anyhow::Result<BufReader<TcpStream>> {
     let name = if target.host.contains(':') { format!("[{}]", target.host) } else { target.host.clone() };
     let authority = format!("{name}:{}", target.port);
     let first = http_try(tcp(host, port, s).await?, &authority, None);
@@ -369,8 +369,8 @@ async fn http(host: &str, port: u16, s: &Settings, target: &Target, user: &str, 
         anyhow::ensure!(status.starts_with('2'), "The HTTP proxy refused the connection: {status}");
         reader = second;
     }
-    anyhow::ensure!(reader.buffer().is_empty(), "The HTTP proxy sent data before the connection was ready.");
-    Ok(reader.into_inner())
+    // The reader stays, as the host's first bytes can arrive with the last header
+    Ok(reader)
 }
 
 /// Refuses a value that cmd.exe would read as more than text, when it's going
