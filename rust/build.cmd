@@ -10,9 +10,9 @@ set "DECK_TOOLS=%CD%\target\release"
 cargo build --release -p deck-setup || exit /b 1
 if not exist dist mkdir dist
 copy /y target\release\rustutty.exe dist\ >nul || (
-    echo Could not update dist\rustutty.exe. Is RustuTTY still running?
+    echo Could not update dist\rustutty.exe. Is RUSTuTTY still running?
     exit /b 1
 )
 for %%t in (plink pscp psftp puttygen pageant) do copy /y target\release\%%t.exe dist\ >nul || exit /b 1
-copy /y target\release\setup.exe dist\RustuTTY-1.0.0-setup.exe >nul || exit /b 1
-echo Built dist\rustutty.exe and dist\RustuTTY-1.0.0-setup.exe
+copy /y target\release\setup.exe dist\RUSTuTTY-1.0.0-setup.exe >nul || exit /b 1
+echo Built dist\rustutty.exe and dist\RUSTuTTY-1.0.0-setup.exe

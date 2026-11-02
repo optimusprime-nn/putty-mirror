@@ -1,4 +1,4 @@
-//! Pageant: holds keys for PuTTY, RustuTTY and other SSH programs, answering
+//! Pageant: holds keys for PuTTY, RUSTuTTY and other SSH programs, answering
 //! on the window PuTTY's clients look for.
 //!
 //!   pageant key.ppk [more keys]

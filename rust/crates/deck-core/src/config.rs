@@ -1,5 +1,5 @@
-//! Connection targets, and saved sessions. PuTTY's own are only read: RustuTTY
-//! never changes PuTTY's settings. A session saved here goes in RustuTTY's own
+//! Connection targets, and saved sessions. PuTTY's own are only read: RUSTuTTY
+//! never changes PuTTY's settings. A session saved here goes in RUSTuTTY's own
 //! key, and takes the place of a PuTTY session of the same name.
 
 use crate::settings::{Settings, Value};
@@ -12,7 +12,7 @@ pub enum Protocol {
     Rlogin,
     Supdup,
     Serial,
-    /// A protocol neither PuTTY nor RustuTTY knows, kept so it can be refused by name.
+    /// A protocol neither PuTTY nor RUSTuTTY knows, kept so it can be refused by name.
     Unsupported(String),
 }
 
@@ -127,7 +127,7 @@ pub fn target_from(settings: Settings) -> Target {
     if host.is_empty() {
         t.refuse = Some("this saved session has no host name".into());
     } else if let Protocol::Unsupported(p) = &t.protocol {
-        t.refuse = Some(format!("RustuTTY doesn't support the {p} protocol"));
+        t.refuse = Some(format!("RUSTuTTY doesn't support the {p} protocol"));
     }
     t
 }
@@ -202,29 +202,29 @@ pub fn load_sessions() -> Vec<(String, Target)> {
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Deleted {
-    /// Gone from RustuTTY's key, and PuTTY has no session of this name.
+    /// Gone from RUSTuTTY's key, and PuTTY has no session of this name.
     Done,
-    /// RustuTTY's copy is gone, and PuTTY's own session of this name shows again.
+    /// RUSTuTTY's copy is gone, and PuTTY's own session of this name shows again.
     PuttyRemains,
     /// Only PuTTY has it, and PuTTY's key is never changed.
     OnlyInPutty,
     Missing,
 }
 
-/// Saves a session in RustuTTY's key. Text and numbers keep PuTTY's types.
+/// Saves a session in RUSTuTTY's key. Text and numbers keep PuTTY's types.
 /// "Default Settings" is a session like any other here.
 #[cfg(windows)]
 pub fn save_session(name: &str, settings: &Settings) -> anyhow::Result<()> {
     save_in(&winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER), name, settings)
 }
 
-/// Deletes a session from RustuTTY's key. PuTTY's key is only ever read.
+/// Deletes a session from RUSTuTTY's key. PuTTY's key is only ever read.
 #[cfg(windows)]
 pub fn delete_session(name: &str) -> anyhow::Result<Deleted> {
     delete_in(&winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER), name)
 }
 
-/// A saved session's settings, RustuTTY's copy first.
+/// A saved session's settings, RUSTuTTY's copy first.
 #[cfg(windows)]
 pub fn load_session(name: &str) -> Option<Settings> {
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);

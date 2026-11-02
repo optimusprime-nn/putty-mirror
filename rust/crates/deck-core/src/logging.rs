@@ -81,7 +81,7 @@ impl Log {
         let mut file = OpenOptions::new().create(true).write(true).append(!overwrite).truncate(overwrite).open(&name)?;
         if s.b("LogHeader", true) {
             let (y, mo, d, h, mi, sec) = civil(unix);
-            writeln!(file, "=~=~=~=~=~=~=~=~=~=~=~= RustuTTY log {y:04}.{mo:02}.{d:02} {h:02}:{mi:02}:{sec:02} UTC =~=~=~=~=~=~=~=~=~=~=~=")?;
+            writeln!(file, "=~=~=~=~=~=~=~=~=~=~=~= RUSTuTTY log {y:04}.{mo:02}.{d:02} {h:02}:{mi:02}:{sec:02} UTC =~=~=~=~=~=~=~=~=~=~=~=")?;
         }
         Ok(Some(Log { file, printable: kind == PRINTABLE, flush: s.b("LogFlush", true), in_escape: Escape::None }))
     }

@@ -293,7 +293,7 @@ pub(crate) fn openssh_pem(algorithm: &str, comment: &str, public: &[u8], private
             put_string(&mut key, q);
             put_string(&mut key, privr.string()?);
         }
-        a => bail!("RustuTTY can't use {a} keys"),
+        a => bail!("RUSTuTTY can't use {a} keys"),
     }
     put_string(&mut key, comment.as_bytes());
 
@@ -352,7 +352,7 @@ pub fn blobs_of(key: &PrivateKey) -> anyhow::Result<(String, Vec<u8>, Vec<u8>)> 
             s.string()?;
             put_string(&mut private, s.string()?);
         }
-        a => bail!("RustuTTY can't use {a} keys"),
+        a => bail!("RUSTuTTY can't use {a} keys"),
     }
     Ok((algorithm, public, private))
 }

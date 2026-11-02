@@ -1,4 +1,4 @@
-//! Installer and uninstaller for RustuTTY. The files to install are embedded,
+//! Installer and uninstaller for RUSTuTTY. The files to install are embedded,
 //! so setup is a single program. It installs for the current user only, needing
 //! no administrator rights, and copies itself in to serve as the uninstaller.
 //!
@@ -11,6 +11,7 @@
 //! shared with any ordinary copy of it.
 #![windows_subsystem = "windows"]
 
+use deck_ui::Tone;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use windows::core::{Interface, GUID, HSTRING};
@@ -20,7 +21,6 @@ use windows::Win32::System::Com::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Shell::PropertiesSystem::*;
 use windows::Win32::UI::Shell::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -34,8 +34,8 @@ const TOOLS: [(&str, &[u8]); 5] = [
     ("pageant.exe", include_bytes!(concat!(env!("DECK_TOOLS"), "/pageant.exe"))),
 ];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RustuTTY";
-const APP_ID: &str = "RustuTTY";
+const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\RUSTuTTY";
+const APP_ID: &str = "RUSTuTTY";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 // PKEY_AppUserModel_ID
 const APP_ID_KEY: PROPERTYKEY = PROPERTYKEY {
@@ -48,13 +48,13 @@ struct Setup {
 }
 
 impl Setup {
-    fn ask(&self, text: &str, style: MESSAGEBOX_STYLE) -> MESSAGEBOX_RESULT {
-        unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("RustuTTY Setup"), style | MB_SETFOREGROUND) }
+    fn ask(&self, text: &str) -> bool {
+        deck_ui::ask(None, "RUSTuTTY Setup", text, Tone::Question)
     }
 
     fn complain(&self, text: &str) {
         if !self.silent {
-            self.ask(text, MB_OK | MB_ICONERROR);
+            deck_ui::tell(None, "RUSTuTTY Setup", text, Tone::Error);
         }
     }
 
@@ -66,10 +66,10 @@ impl Setup {
         let (exe, licence, uninstaller) = (dir.join("rustutty.exe"), dir.join("LICENCE.txt"), dir.join("uninstall.exe"));
         if !self.silent {
             let text = format!(
-                "Install RustuTTY {VERSION} for this user?\n\nFolder: {}\n\nYour saved PuTTY sessions are not changed.",
+                "Install RUSTuTTY {VERSION} for this user?\n\nFolder: {}\n\nYour saved PuTTY sessions are not changed.",
                 dir.display()
             );
-            if self.ask(&text, MB_YESNO | MB_ICONQUESTION) != IDYES {
+            if !self.ask(&text) {
                 return 2;
             }
         }
@@ -80,7 +80,7 @@ impl Setup {
         // A running copy can't be overwritten, and this fails before anything
         // has changed, so an upgrade is all or nothing.
         if std::fs::write(&exe, EXE).is_err() {
-            self.complain("Could not write rustutty.exe.\n\nIf RustuTTY is running, close it and try again.");
+            self.complain("Could not write rustutty.exe.\n\nIf RUSTuTTY is running, close it and try again.");
             return 1;
         }
         let rest = (|| -> Result<(), String> {
@@ -97,7 +97,7 @@ impl Setup {
             self.complain(&format!("Installation did not finish.\n\n{why}"));
             return 1;
         }
-        if !self.silent && self.ask("RustuTTY is installed. Start it now?", MB_YESNO | MB_ICONINFORMATION) == IDYES {
+        if !self.silent && self.ask("RUSTuTTY is installed. Start it now?") {
             let _ = std::process::Command::new(&exe).current_dir(&dir).spawn();
         }
         0
@@ -108,12 +108,12 @@ impl Setup {
             self.complain("Could not find the install folder.");
             return 1;
         };
-        if !self.silent && self.ask("Remove RustuTTY?\n\nYour saved PuTTY sessions are kept.", MB_YESNO | MB_ICONQUESTION) != IDYES {
+        if !self.silent && !self.ask("Remove RUSTuTTY?\n\nYour saved PuTTY sessions are kept.") {
             return 2;
         }
         if let Err(e) = std::fs::remove_file(dir.join("rustutty.exe")) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                self.complain("Could not remove rustutty.exe.\n\nIf RustuTTY is running, close it and try again.");
+                self.complain("Could not remove rustutty.exe.\n\nIf RUSTuTTY is running, close it and try again.");
                 return 1;
             }
         }
@@ -124,7 +124,7 @@ impl Setup {
         let _ = std::fs::remove_file(lnk);
         let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey(UNINSTALL_KEY);
         if !self.silent {
-            self.ask("RustuTTY has been removed.", MB_OK | MB_ICONINFORMATION);
+            deck_ui::tell(None, "RUSTuTTY Setup", "RUSTuTTY has been removed.", Tone::Info);
         }
         // This has to be the very last thing done: the deletion only works
         // once this program has exited, and it waits a fixed time for that.
@@ -143,11 +143,11 @@ fn known_folder(id: &GUID, flags: KNOWN_FOLDER_FLAG) -> Option<PathBuf> {
 }
 
 fn install_dir() -> Option<PathBuf> {
-    Some(known_folder(&FOLDERID_UserProgramFiles, KF_FLAG_CREATE)?.join("RustuTTY"))
+    Some(known_folder(&FOLDERID_UserProgramFiles, KF_FLAG_CREATE)?.join("RUSTuTTY"))
 }
 
 fn shortcut_path() -> Option<PathBuf> {
-    Some(known_folder(&FOLDERID_Programs, KF_FLAG_DEFAULT)?.join("RustuTTY.lnk"))
+    Some(known_folder(&FOLDERID_Programs, KF_FLAG_DEFAULT)?.join("RUSTuTTY.lnk"))
 }
 
 fn make_shortcut(lnk: &Path, exe: &Path, dir: &Path) -> windows::core::Result<()> {
@@ -168,7 +168,7 @@ fn make_shortcut(lnk: &Path, exe: &Path, dir: &Path) -> windows::core::Result<()
 
 fn register(dir: &Path, exe: &Path, uninstaller: &Path) -> std::io::Result<()> {
     let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey_with_flags(UNINSTALL_KEY, KEY_SET_VALUE)?;
-    key.set_value("DisplayName", &"RustuTTY")?;
+    key.set_value("DisplayName", &"RUSTuTTY")?;
     key.set_value("DisplayVersion", &VERSION)?;
     key.set_value("DisplayIcon", &exe.display().to_string())?;
     key.set_value("InstallLocation", &dir.display().to_string())?;
@@ -201,6 +201,7 @@ fn main() {
     unsafe {
         let _ = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     }
+    deck_ui::init(true);
     let args: Vec<String> = std::env::args().skip(1).map(|a| a.to_uppercase()).collect();
     let setup = Setup { silent: args.iter().any(|a| a == "/S") };
     let uninstall = args.iter().any(|a| a == "/U");

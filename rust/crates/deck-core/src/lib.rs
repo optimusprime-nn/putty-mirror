@@ -1,4 +1,4 @@
-//! Everything in RustuTTY that doesn't touch a window: saved sessions, host
+//! Everything in RUSTuTTY that doesn't touch a window: saved sessions, host
 //! keys, the terminal, key encoding and the network sessions.
 
 pub mod algorithms;

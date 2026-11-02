@@ -14,7 +14,7 @@ impl Job {
             let name = wide(printer);
             OpenPrinterW(PCWSTR(name.as_ptr()), &mut h, None).ok()?;
             let doc = DOC_INFO_1W {
-                pDocName: PWSTR(w!("RustuTTY remote printer output").as_ptr() as *mut u16),
+                pDocName: PWSTR(w!("RUSTuTTY remote printer output").as_ptr() as *mut u16),
                 pOutputFile: PWSTR::null(),
                 pDatatype: PWSTR(w!("RAW").as_ptr() as *mut u16),
             };

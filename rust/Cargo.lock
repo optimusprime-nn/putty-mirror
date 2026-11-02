@@ -596,6 +596,7 @@ dependencies = [
 name = "deck-setup"
 version = "1.0.0"
 dependencies = [
+ "deck-ui",
  "embed-resource",
  "windows",
  "winreg",
@@ -614,6 +615,14 @@ dependencies = [
  "tokio",
  "windows",
  "zeroize",
+]
+
+[[package]]
+name = "deck-ui"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "winreg",
 ]
 
 [[package]]
@@ -1893,6 +1902,7 @@ name = "rustutty"
 version = "0.1.0"
 dependencies = [
  "deck-core",
+ "deck-ui",
  "embed-resource",
  "rand",
  "russh",

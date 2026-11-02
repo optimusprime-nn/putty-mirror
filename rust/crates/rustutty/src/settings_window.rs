@@ -252,8 +252,8 @@ fn template(title: &str, width: i16, height: i16, ex: u32) -> Vec<u32> {
     t.extend(pair(ex));
     t.extend([0, 0, 0, width as u16, height as u16, 0, 0]);
     t.extend(title.encode_utf16().chain([0]));
-    t.push(8);
-    t.extend("MS Shell Dlg".encode_utf16().chain([0]));
+    t.push(9);
+    t.extend("Segoe UI".encode_utf16().chain([0]));
     t.chunks(2).map(|c| c[0] as u32 | (c.get(1).copied().unwrap_or(0) as u32) << 16).collect()
 }
 
@@ -276,10 +276,8 @@ impl Dlg {
     fn message(&mut self, text: &str, title: &str, kind: MESSAGEBOX_STYLE) {
         self.log.push(text.to_string());
         if !TEST {
-            let (t, c) = (wide(text), wide(title));
-            unsafe {
-                MessageBoxW(Some(self.hwnd), PCWSTR(t.as_ptr()), PCWSTR(c.as_ptr()), MB_OK | kind);
-            }
+            let tone = if kind == MB_ICONERROR { deck_ui::Tone::Error } else if kind == MB_ICONWARNING { deck_ui::Tone::Warning } else { deck_ui::Tone::Info };
+            deck_ui::tell(Some(self.hwnd), title, text, tone);
         }
     }
 
@@ -294,8 +292,7 @@ impl Dlg {
                 let _ = DeleteObject(self.font.into());
             }
             self.dpi = dpi;
-            let height = -((8 * dpi as i32 + 36) / 72);
-            self.font = CreateFontW(height, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 0, w!("MS Shell Dlg"));
+            self.font = deck_ui::ui_font(dpi, 9, 400);
             let dc = GetDC(Some(self.hwnd));
             let old = SelectObject(dc, self.font.into());
             let mut size = SIZE::default();
@@ -351,6 +348,7 @@ impl Dlg {
             let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
             let h = CreateWindowExW(WINDOW_EX_STYLE(ex), PCWSTR(c.as_ptr()), PCWSTR(t.as_ptr()), WINDOW_STYLE(style), r[0], r[1], r[2], r[3], Some(self.hwnd), Some(HMENU(id as usize as *mut _)), Some(instance), None).unwrap_or_default();
             send(h, WM_SETFONT, self.font.0 as usize, 1);
+            deck_ui::style_control(h);
             h
         }
     }
@@ -478,8 +476,10 @@ impl Dlg {
 
         let label = self.make("STATIC", WS_CHILD.0 | WS_VISIBLE.0, 0, "Cate&gory:", self.px([3, 3, 95, 10]), ID_TREE_LABEL);
         self.fixed.push(label);
-        let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_HASLINES | TVS_DISABLEDRAGDROP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS;
+        let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_DISABLEDRAGDROP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT;
         self.tree = self.make("SysTreeView32", style, 0x200, "", self.px([3, 13, 95, 219]), ID_TREE);
+        send(self.tree, TVM_SETITEMHEIGHT, (24 * self.dpi / 96) as usize, 0);
+        send(self.tree, TVM_SETEXTENDEDSTYLE, 4, 4); // TVS_EX_DOUBLEBUFFER
         self.fixed.push(self.tree);
         self.fill_tree();
         self.create_panel();
@@ -1514,16 +1514,20 @@ impl Dlg {
     fn draw_title(&self, di: &DRAWITEMSTRUCT) {
         let Some((_, text)) = self.titles.iter().find(|(id, _)| *id == di.CtlID as i32) else { return };
         let text: Vec<u16> = text.encode_utf16().collect();
+        let mut text = text;
         let mut r = di.rcItem;
+        let p = deck_ui::palette();
         unsafe {
             let hdc = di.hDC;
-            let old = SelectObject(hdc, self.font.into());
-            let mut s = SIZE::default();
-            let _ = GetTextExtentPoint32W(hdc, &text, &mut s);
-            let _ = DrawEdge(hdc, &mut r, EDGE_ETCHED, BF_ADJUST | BF_RECT);
+            deck_ui::fill(hdc, &r, p.bg);
+            deck_ui::fill(hdc, &RECT { top: r.bottom - 1, ..r }, p.border);
+            let font = deck_ui::ui_font(self.dpi, 10, 600);
+            let old = SelectObject(hdc, font.into());
             SetBkMode(hdc, TRANSPARENT);
-            let _ = TextOutW(hdc, r.left + (r.right - r.left - s.cx) / 2, r.top + (r.bottom - r.top - s.cy) / 2, &text);
+            SetTextColor(hdc, p.text);
+            DrawTextW(hdc, &mut text, &mut r, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
             SelectObject(hdc, old);
+            let _ = DeleteObject(font.into());
         }
     }
 
@@ -1595,9 +1599,13 @@ fn choose_colour(owner: HWND, c: [i32; 3]) -> Option<[i32; 3]> {
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> isize {
     let Some(d) = DLG.as_mut() else { return 0 };
+    if let Some(answer) = deck_ui::dialog_message(hwnd, msg, wp, lp) {
+        return answer;
+    }
     match msg {
         WM_INITDIALOG => {
             d.hwnd = hwnd;
+            deck_ui::style_window(hwnd);
             // The dialog is rebuilt on a DPI change, so Windows mustn't rescale it too
             let _ = SetDialogDpiChangeBehavior(hwnd, DDC_DISABLE_ALL, DDC_DISABLE_ALL);
             d.set_dpi(GetDpiForWindow(hwnd).max(96));
@@ -1658,6 +1666,12 @@ const ID_ABOUT_LICENCE: i32 = 300;
 const ID_ABOUT_TEXT: i32 = 301;
 
 unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> isize {
+    if let Some(answer) = deck_ui::dialog_message(hwnd, msg, wp, lp) {
+        return answer;
+    }
+    if msg == WM_INITDIALOG {
+        deck_ui::style_window(hwnd);
+    }
     let map = |x, y, cx, cy| {
         let mut r = RECT { left: x, top: y, right: x + cx, bottom: y + cy };
         let _ = MapDialogRect(hwnd, &mut r);
@@ -1667,6 +1681,7 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
         let t = wide(text);
         let h = CreateWindowExW(WINDOW_EX_STYLE(ex), class, PCWSTR(t.as_ptr()), WS_CHILD | WS_VISIBLE | WINDOW_STYLE(style), r.left, r.top, r.right - r.left, r.bottom - r.top, Some(hwnd), Some(HMENU(id as usize as *mut _)), None, None).unwrap_or_default();
         send(h, WM_SETFONT, send(hwnd, WM_GETFONT, 0, 0) as usize, 1);
+        deck_ui::style_control(h);
     };
     let edit = (ES_READONLY | ES_MULTILINE | ES_CENTER) as u32;
     match msg {
@@ -2105,7 +2120,7 @@ mod tests {
     fn reconfigure_applies_and_shows_what_config_c_keeps() {
         with_script(
             |d| {
-                assert_eq!(text_of(d.hwnd), "RustuTTY Reconfiguration");
+                assert_eq!(text_of(d.hwnd), "RUSTuTTY Reconfiguration");
                 assert!(d.part(Group::Saved, 2).is_none() && d.part(Group::Saved, 4).is_none() && d.part(Group::Proto, 0).is_none());
                 assert!(d.part(Group::Saved, 3).is_some());
                 assert_eq!(text_of(d.part_item(Group::Saved, 5, 0)), "&Apply");

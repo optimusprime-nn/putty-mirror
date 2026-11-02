@@ -1,4 +1,4 @@
-//! RustuTTY: terminal sessions in one window, listed down the left.
+//! RUSTuTTY: terminal sessions in one window, listed down the left.
 #![cfg_attr(all(not(debug_assertions), not(feature = "test-hooks")), windows_subsystem = "windows")]
 
 mod clipboard;
@@ -22,7 +22,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT};
 use windows::Win32::System::Diagnostics::Debug::{Beep, MessageBeep};
-use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar, DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED};
+use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar, DRAWITEMSTRUCT, NMHDR, ODS_FOCUS, ODS_SELECTED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -44,7 +44,7 @@ const MAX_PRINT_JOB: usize = 64 << 20;
 const ID_OPEN: usize = 100;
 const ID_LIST: usize = 101;
 /// Width of the close box at the end of an open session's row.
-const CLOSE_BOX: i32 = 22;
+const CLOSE_BOX: i32 = 26;
 const ID_SAVED: usize = 102;
 const ID_COPY: usize = 103;
 const ID_PASTE: usize = 104;
@@ -68,12 +68,19 @@ const IDM_SPECIAL_MIN: usize = 0x0400;
 const IDM_SPECIAL_MAX: usize = 0x0800;
 const IDM_COPYALL: usize = 0x0170;
 const IDM_FULLSCREEN: usize = 0x0180;
+const IDM_THEME: usize = 0x0190;
 const IDM_SAVED_MIN: usize = 0x1000;
 const IDM_SAVED_MAX: usize = 0xF000;
 
-const SIDEBAR: i32 = 240;
-const PAD: i32 = 6;
-const ROW: i32 = 26;
+const SIDEBAR: i32 = 264;
+const PAD: i32 = 10;
+const ROW: i32 = 32;
+/// Height of the name at the top of the sidebar.
+const HEADER: i32 = 50;
+const LIST_ROW: i32 = 32;
+/// The gap kept between a list and the rounded card around it.
+const INSET: i32 = 4;
+const SECTION: i32 = 24;
 const SCROLL_STEP: i32 = 3;
 const TIMER_BLINK: usize = 1;
 const TIMER_FLASH: usize = 2;
@@ -106,8 +113,11 @@ impl Session {
             let _ = self.tx.send(Command::Input(bytes));
         }
     }
+    fn name(&self) -> String {
+        self.title.clone().unwrap_or_else(|| self.target.label())
+    }
     fn label(&self) -> String {
-        let name = self.title.clone().unwrap_or_else(|| self.target.label());
+        let name = self.name();
         match (self.closed, self.bell) {
             (true, _) => format!("(ended) {name}"),
             (_, true) => format!("* {name}"),
@@ -125,7 +135,13 @@ struct Deck {
     saved_list: HWND,
     labels: [HWND; 2],
     buttons: [HWND; 5],
+    theme_button: HWND,
+    /// The cards behind the host box and the two lists.
+    cards: [RECT; 3],
+    logo: HICON,
     gui_font: HFONT,
+    section_font: HFONT,
+    title_font: HFONT,
     font: HFONT,
     bold: HFONT,
     wide_font: HFONT,
@@ -265,7 +281,7 @@ impl Deck {
 
     fn make_fonts(&mut self) {
         unsafe {
-            for f in [self.font, self.bold, self.gui_font, self.wide_font, self.wide_bold] {
+            for f in [self.font, self.bold, self.gui_font, self.section_font, self.title_font, self.wide_font, self.wide_bold] {
                 if !f.is_invalid() {
                     let _ = DeleteObject(f.into());
                 }
@@ -303,7 +319,15 @@ impl Deck {
             let (wide_font, wide_bold) = (named("WideFont"), named("WideBoldFont"));
             self.wide_font = wide_font;
             self.wide_bold = wide_bold;
-            self.gui_font = make(-self.px(13), FW_NORMAL.0 as i32, w!("Segoe UI"));
+            self.gui_font = deck_ui::ui_font(self.dpi, 10, 400);
+            self.section_font = deck_ui::ui_font(self.dpi, 8, 600);
+            self.title_font = deck_ui::ui_font(self.dpi, 13, 600);
+            if !self.logo.is_invalid() {
+                let _ = DestroyIcon(self.logo);
+            }
+            let instance = GetModuleHandleW(None).ok().map(|i| HINSTANCE(i.0));
+            let size = self.px(24);
+            self.logo = LoadImageW(instance, PCWSTR(1 as *const u16), IMAGE_ICON, size, size, LR_DEFAULTCOLOR).map_or(HICON::default(), |h| HICON(h.0));
             let dc = GetDC(Some(self.content));
             let old = SelectObject(dc, self.font.into());
             let mut tm = TEXTMETRICW::default();
@@ -311,12 +335,15 @@ impl Deck {
             SelectObject(dc, old);
             ReleaseDC(Some(self.content), dc);
             self.cell = (tm.tmAveCharWidth.max(1), tm.tmHeight.max(1));
-            let all = self.labels.iter().chain(&self.buttons).chain([&self.edit, &self.open, &self.list, &self.saved_list]);
+            let all = self.buttons.iter().chain([&self.theme_button, &self.edit, &self.open, &self.list, &self.saved_list]);
             for &h in all {
                 SendMessageW(h, WM_SETFONT, Some(WPARAM(self.gui_font.0 as usize)), Some(LPARAM(1)));
             }
+            for &h in &self.labels {
+                SendMessageW(h, WM_SETFONT, Some(WPARAM(self.section_font.0 as usize)), Some(LPARAM(1)));
+            }
             for h in [self.list, self.saved_list] {
-                SendMessageW(h, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.px(21) as isize)));
+                SendMessageW(h, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.px(LIST_ROW) as isize)));
             }
         }
     }
@@ -347,30 +374,40 @@ impl Deck {
             // No copying of old pixels: the panel is repainted whole below
             let _ = SetWindowPos(hwnd, None, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         };
-        let open_w = self.px(52);
-        place(self.edit, pad, pad, inner - open_w - pad, row);
-        place(self.open, pad + inner - open_w, pad, open_w, row);
-        let mut y = pad * 2 + row;
-        let bottom = h - pad - row * 3 - pad;
-        let lists = (bottom - y - row * 2 - pad).max(0);
-        place(self.labels[0], pad, y, inner, row);
-        y += row;
-        place(self.list, pad, y, inner, lists / 2);
-        y += lists / 2 + pad;
-        place(self.labels[1], pad, y, inner, row);
-        y += row;
-        place(self.saved_list, pad, y, inner, lists - lists / 2);
-        let half = (inner - pad) / 2;
+        let (head, section, inset, gap) = (self.px(HEADER), self.px(SECTION), self.px(INSET), self.px(6));
+        let open_w = self.px(64);
+        let theme_w = self.px(58);
+        place(self.theme_button, side - pad - theme_w, (head - self.px(28)) / 2, theme_w, self.px(28));
+        let box_w = inner - open_w - gap;
+        let host = RECT { left: pad, top: head, right: pad + box_w, bottom: head + row };
+        let text_h = self.px(20);
+        place(self.edit, pad + self.px(10), head + (row - text_h) / 2, box_w - self.px(20), text_h);
+        place(self.open, pad + inner - open_w, head, open_w, row);
+        let mut y = head + row + gap;
+        let bottom = h - pad - row * 3 - gap * 2;
+        let lists = (bottom - y - section * 2 - gap * 2).max(0);
+        let card = |top: i32, cy: i32| RECT { left: pad, top, right: pad + inner, bottom: top + cy };
+        place(self.labels[0], pad + self.px(2), y + self.px(5), inner, section - self.px(5));
+        y += section;
+        let open_card = card(y, lists / 2);
+        place(self.list, pad + inset, y + inset, inner - inset * 2, (lists / 2 - inset * 2).max(0));
+        y += lists / 2 + gap;
+        place(self.labels[1], pad + self.px(2), y + self.px(5), inner, section - self.px(5));
+        y += section;
+        let saved_card = card(y, lists - lists / 2);
+        place(self.saved_list, pad + inset, y + inset, inner - inset * 2, (lists - lists / 2 - inset * 2).max(0));
+        self.cards = [host, open_card, saved_card];
+        let half = (inner - gap) / 2;
         for (i, &b) in self.buttons.iter().enumerate() {
-            let x = pad + (i as i32 % 2) * (half + pad);
+            let x = pad + (i as i32 % 2) * (half + gap);
             // Settings has the last row to itself
             let cx = if i == self.buttons.len() - 1 { inner } else { half };
-            place(b, x, bottom + pad + (i as i32 / 2) * row, cx, row - 2);
+            place(b, x, bottom + gap + (i as i32 / 2) * (row + gap), cx, row);
         }
         let full = self.full_screen.is_some();
         let (left, width) = if full { (0, w) } else { (side, (w - side).max(1)) };
         place(self.content, left, 0, width, h);
-        for h in self.labels.iter().chain(&self.buttons).chain([&self.edit, &self.open, &self.list, &self.saved_list]) {
+        for h in self.labels.iter().chain(&self.buttons).chain([&self.theme_button, &self.edit, &self.open, &self.list, &self.saved_list]) {
             unsafe {
                 let _ = ShowWindow(*h, if full { SW_HIDE } else { SW_SHOWNA });
             }
@@ -557,9 +594,9 @@ impl Deck {
             let sel = self.active.map_or(usize::MAX, |i| i);
             SendMessageW(self.list, LB_SETCURSEL, Some(WPARAM(sel)), None);
             let title = match self.active.and_then(|i| self.sessions.get(i)) {
-                Some(s) if s.closed => "RustuTTY (inactive)".to_string(),
-                Some(s) => format!("{} - RustuTTY", s.label()),
-                None => "RustuTTY".to_string(),
+                Some(s) if s.closed => "RUSTuTTY (inactive)".to_string(),
+                Some(s) => format!("{} - RUSTuTTY", s.label()),
+                None => "RUSTuTTY".to_string(),
             };
             let _ = SetWindowTextW(self.main, PCWSTR(wide(&title).as_ptr()));
         }
@@ -802,10 +839,25 @@ impl Deck {
         self.redraw();
     }
 
-    fn notice(&self, title: PCWSTR, text: &str) {
+    fn notice(&self, title: &str, text: &str) {
         if !cfg!(feature = "test-hooks") {
-            unsafe { MessageBoxW(Some(self.main), PCWSTR(wide(text).as_ptr()), title, MB_OK | MB_ICONINFORMATION) };
+            deck_ui::tell(Some(self.main), title, text, deck_ui::Tone::Info);
         }
+    }
+
+    /// The button shows what it changes to.
+    fn show_theme(&self) {
+        let text = if deck_ui::dark() { w!("Light") } else { w!("Dark") };
+        unsafe {
+            let _ = SetWindowTextW(self.theme_button, text);
+        }
+    }
+
+    fn toggle_theme(&mut self) {
+        deck_ui::set_dark(!deck_ui::dark());
+        self.show_theme();
+        deck_ui::restyle(self.main);
+        self.redraw();
     }
 
     /// A command from the window menu. Returns false if it isn't one.
@@ -813,7 +865,7 @@ impl Deck {
         match id {
             IDM_SHOWLOG => {
                 let log = self.current().map_or(String::new(), |s| s.log.join("\n"));
-                self.notice(w!("RustuTTY Event Log"), if log.is_empty() { "Nothing logged." } else { &log });
+                self.notice("RUSTuTTY Event Log", if log.is_empty() { "Nothing logged." } else { &log });
             }
             IDM_NEWSESS => self.edit_saved(None),
             IDM_DUPSESS => {
@@ -835,8 +887,9 @@ impl Deck {
                 self.redraw();
             }
             IDM_FULLSCREEN => self.toggle_full_screen(),
-            IDM_HELP => self.notice(w!("RustuTTY Help"), "RustuTTY has no help file yet. See the README."),
-            IDM_ABOUT => self.notice(w!("About RustuTTY"), concat!("RustuTTY ", env!("CARGO_PKG_VERSION"), "\n\nPuTTY's programs rewritten in Rust.\nAn unofficial program, not connected with the PuTTY project.")),
+            IDM_THEME => self.toggle_theme(),
+            IDM_HELP => self.notice("RUSTuTTY Help", "RUSTuTTY has no help file yet. See the README."),
+            IDM_ABOUT => self.notice("About RUSTuTTY", concat!("RUSTuTTY ", env!("CARGO_PKG_VERSION"), "\n\nPuTTY's programs rewritten in Rust.\nAn unofficial program, not connected with the PuTTY project.")),
             n if (IDM_SPECIAL_MIN..IDM_SPECIAL_MAX).contains(&n) => {
                 let special = self.current().and_then(|s| Some((s.tx.clone(), session::specials(&s.target.protocol).get((n - IDM_SPECIAL_MIN) / 0x10)?.1?)));
                 if let Some((tx, special)) = special {
@@ -906,9 +959,10 @@ impl Deck {
             let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
             let full = if self.full_screen.is_some() { MF_CHECKED } else { MF_UNCHECKED };
             let _ = AppendMenuW(m, MF_STRING | full, IDM_FULLSCREEN, w!("&Full Screen"));
+            let _ = AppendMenuW(m, MF_STRING, IDM_THEME, if deck_ui::dark() { w!("Light &Appearance") } else { w!("Dark &Appearance") });
             let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
             let _ = AppendMenuW(m, MF_STRING, IDM_HELP, w!("&Help"));
-            let _ = AppendMenuW(m, MF_STRING, IDM_ABOUT, w!("&About RustuTTY"));
+            let _ = AppendMenuW(m, MF_STRING, IDM_ABOUT, w!("&About RUSTuTTY"));
         }
     }
 
@@ -998,8 +1052,7 @@ impl Deck {
         if cfg!(feature = "test-hooks") {
             return true;
         }
-        let r = unsafe { MessageBoxW(Some(self.main), PCWSTR(wide(text).as_ptr()), w!("RustuTTY"), MB_YESNO | MB_ICONQUESTION) };
-        r == IDYES
+        deck_ui::ask(Some(self.main), "RUSTuTTY", text, deck_ui::Tone::Question)
     }
 
     fn paste_all(&mut self) {
@@ -1387,35 +1440,98 @@ impl Deck {
         at.is_some()
     }
 
+    /// Draws a list row off screen, so that it doesn't flicker as it changes.
+    fn draw_row(&self, item: &DRAWITEMSTRUCT, draw: impl FnOnce(HDC, RECT, COLORREF)) {
+        let p = deck_ui::palette();
+        let r = item.rcItem;
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+        unsafe {
+            let mem = CreateCompatibleDC(Some(item.hDC));
+            let bmp = CreateCompatibleBitmap(item.hDC, w, h);
+            let old = SelectObject(mem, bmp.into());
+            let area = RECT { left: 0, top: 0, right: w, bottom: h };
+            deck_ui::fill(mem, &area, p.field);
+            let row = RECT { top: self.px(1), bottom: h - self.px(1), ..area };
+            let focus = (item.itemState.0 & ODS_FOCUS.0 != 0).then_some(p.accent);
+            deck_ui::round(mem, row, self.px(5), selected.then_some(p.selected), focus);
+            SetBkMode(mem, TRANSPARENT);
+            let old_font = SelectObject(mem, self.gui_font.into());
+            draw(mem, area, if selected { p.selected_text } else { p.text });
+            SelectObject(mem, old_font);
+            let _ = BitBlt(item.hDC, r.left, r.top, w, h, Some(mem), 0, 0, SRCCOPY);
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+        }
+    }
+
     fn draw_session_row(&self, item: &DRAWITEMSTRUCT) {
         let Some(s) = self.sessions.get(item.itemID as usize) else { return };
-        let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
-        let (back, fore) = if selected { (COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT) } else { (COLOR_WINDOW, COLOR_WINDOWTEXT) };
-        let dc = item.hDC;
-        let r = item.rcItem;
-        unsafe {
-            FillRect(dc, &r, GetSysColorBrush(back));
-            let colour = COLORREF(GetSysColor(fore));
-            SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, colour);
-            let old_font = SelectObject(dc, self.gui_font.into());
-            let mut text: Vec<u16> = s.label().encode_utf16().collect();
-            let mut area = RECT { left: r.left + self.px(3), right: r.right - self.px(CLOSE_BOX), ..r };
+        let p = deck_ui::palette();
+        self.draw_row(item, |dc, r, ink| unsafe {
+            let dot = self.px(8);
+            let (left, top) = (r.left + self.px(10), (r.top + r.bottom - dot) / 2);
+            let state = if s.closed { p.muted } else if s.bell { p.warn } else { p.good };
+            deck_ui::round(dc, RECT { left, top, right: left + dot, bottom: top + dot }, dot / 2, Some(state), None);
+            SetTextColor(dc, if s.closed { p.muted } else { ink });
+            let mut text: Vec<u16> = s.name().encode_utf16().collect();
+            let mut area = RECT { left: left + dot + self.px(10), right: r.right - self.px(CLOSE_BOX), ..r };
             DrawTextW(dc, &mut text, &mut area, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-            SelectObject(dc, old_font);
+            deck_ui::cross(dc, r.right - self.px(CLOSE_BOX) / 2, (r.top + r.bottom) / 2, self.px(4), p.muted);
+        });
+    }
 
-            let pen = CreatePen(PS_SOLID, self.px(1).max(1), colour);
-            let old_pen = SelectObject(dc, pen.into());
-            let (x, y, arm) = (r.right - self.px(CLOSE_BOX) / 2, (r.top + r.bottom) / 2, self.px(4));
-            for (from, to) in [(-arm, arm + 1), (arm, -arm - 1)] {
-                let _ = MoveToEx(dc, x + from, y - arm, None);
-                let _ = LineTo(dc, x + to, y + arm + 1);
-            }
-            SelectObject(dc, old_pen);
-            let _ = DeleteObject(pen.into());
-            if item.itemState.0 & ODS_FOCUS.0 != 0 {
-                let _ = DrawFocusRect(dc, &r);
-            }
+    fn draw_saved_row(&self, item: &DRAWITEMSTRUCT) {
+        let Some((name, target)) = self.saved.get(item.itemID as usize) else { return };
+        let p = deck_ui::palette();
+        let kind = match target.protocol {
+            Protocol::Ssh => "SSH",
+            Protocol::Telnet => "TEL",
+            Protocol::Raw => "RAW",
+            Protocol::Rlogin => "RLG",
+            Protocol::Supdup => "SUP",
+            Protocol::Serial => "COM",
+            Protocol::Unsupported(_) => "?",
+        };
+        self.draw_row(item, |dc, r, ink| unsafe {
+            let (left, height) = (r.left + self.px(6), self.px(18));
+            let top = (r.top + r.bottom - height) / 2;
+            let mut badge = RECT { left, top, right: left + self.px(36), bottom: top + height };
+            deck_ui::round(dc, badge, self.px(4), Some(p.control), None);
+            let old = SelectObject(dc, self.section_font.into());
+            SetTextColor(dc, p.accent);
+            let mut text: Vec<u16> = kind.encode_utf16().collect();
+            DrawTextW(dc, &mut text, &mut badge, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+            SelectObject(dc, old);
+            SetTextColor(dc, ink);
+            let mut text: Vec<u16> = name.encode_utf16().collect();
+            let mut area = RECT { left: badge.right + self.px(8), right: r.right - self.px(6), ..r };
+            DrawTextW(dc, &mut text, &mut area, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        });
+    }
+
+    fn paint_sidebar(&self, dc: HDC) {
+        let p = deck_ui::palette();
+        let mut r = RECT::default();
+        let (side, pad) = (self.px(SIDEBAR), self.px(PAD));
+        unsafe {
+            let _ = GetClientRect(self.main, &mut r);
+            deck_ui::fill(dc, &RECT { right: side.min(r.right), ..r }, p.bg);
+            deck_ui::fill(dc, &RECT { left: side - 1, right: side, ..r }, p.border);
+            let size = self.px(24);
+            let middle = self.px(HEADER) / 2;
+            let _ = DrawIconEx(dc, pad, middle - size / 2, self.logo, size, size, 0, None, DI_NORMAL);
+            let old = SelectObject(dc, self.title_font.into());
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, p.text);
+            let mut name: Vec<u16> = "RUSTuTTY".encode_utf16().collect();
+            let mut area = RECT { left: pad + size + self.px(8), top: 0, right: side, bottom: self.px(HEADER) };
+            DrawTextW(dc, &mut name, &mut area, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SelectObject(dc, old);
+        }
+        for &card in &self.cards {
+            deck_ui::round(dc, card, self.px(7), Some(p.field), Some(p.border));
         }
     }
 
@@ -1447,20 +1563,29 @@ impl Deck {
 
     fn paint(&mut self, dc: HDC, area: RECT) {
         unsafe {
-            let bg = self.current().map_or((0, 0, 0), |s| s.term.palette().background());
+            let bg = self.current().map(|s| s.term.palette().background());
             let rgb = |c: (u8, u8, u8)| COLORREF(c.0 as u32 | (c.1 as u32) << 8 | (c.2 as u32) << 16);
-            let brush = CreateSolidBrush(rgb(bg));
-            FillRect(dc, &area, brush);
-            let _ = DeleteObject(brush.into());
             let Some(s) = self.active.and_then(|i| self.sessions.get(i)) else {
-                let old = SelectObject(dc, self.gui_font.into());
-                SetBkColor(dc, COLORREF(0));
-                SetTextColor(dc, COLORREF(0xbbbbbb));
-                let text: Vec<u16> = "Type a host at the top left, or double-click a saved session.".encode_utf16().collect();
-                let _ = TextOutW(dc, self.px(16), self.px(16), &text);
+                let p = deck_ui::palette();
+                deck_ui::fill(dc, &area, p.field);
+                SetBkMode(dc, TRANSPARENT);
+                let middle = (area.top + area.bottom) / 2;
+                let old = SelectObject(dc, self.title_font.into());
+                SetTextColor(dc, p.text);
+                let mut text: Vec<u16> = "No session open".encode_utf16().collect();
+                let mut top = RECT { top: middle - self.px(34), bottom: middle, ..area };
+                DrawTextW(dc, &mut text, &mut top, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+                SelectObject(dc, self.gui_font.into());
+                SetTextColor(dc, p.muted);
+                let mut text: Vec<u16> = "Type a host at the top left, or double-click a saved session.".encode_utf16().collect();
+                let mut below = RECT { top: middle, bottom: middle + self.px(30), ..area };
+                DrawTextW(dc, &mut text, &mut below, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
                 SelectObject(dc, old);
                 return;
             };
+            let brush = CreateSolidBrush(rgb(bg.unwrap_or((0, 0, 0))));
+            FillRect(dc, &area, brush);
+            let _ = DeleteObject(brush.into());
             let screen = s.term.screen();
             let (cw, ch) = self.cell;
             let origin = s.target.settings.i("WindowBorder", 1) as i32;
@@ -1571,6 +1696,27 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_SETFOCUS => {
             take_focus(d.content);
         }
+        WM_ERASEBKGND => return LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let dc = BeginPaint(hwnd, &mut ps);
+            d.paint_sidebar(dc);
+            let _ = EndPaint(hwnd, &ps);
+        }
+        WM_NOTIFY => {
+            let open = (*(lp.0 as *const NMHDR)).hwndFrom == d.open;
+            if let Some(answer) = deck_ui::custom_draw(lp, open) {
+                return LRESULT(answer);
+            }
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX | WM_CTLCOLORBTN => {
+            let Some(answer) = deck_ui::ctl_colour(msg, wp, lp) else { return DefWindowProcW(hwnd, msg, wp, lp) };
+            if d.labels.contains(&HWND(lp.0 as *mut _)) {
+                SetTextColor(HDC(wp.0 as *mut _), deck_ui::palette().muted);
+            }
+            return LRESULT(answer);
+        }
+        WM_COMMAND if wp.0 & 0xffff == IDM_THEME => d.toggle_theme(),
         WM_COMMAND => d.command(wp.0 & 0xffff, (wp.0 >> 16) as u32 & 0xffff),
         WM_SYSCOMMAND if d.window_command(wp.0 & !0xf) => {}
         WM_INITMENU if GetSystemMenu(hwnd, false).0 as usize == wp.0 => d.refresh_system_menu(),
@@ -1578,17 +1724,22 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             d.draw_session_row(&*(lp.0 as *const DRAWITEMSTRUCT));
             return LRESULT(1);
         }
+        WM_DRAWITEM if wp.0 == ID_SAVED => {
+            d.draw_saved_row(&*(lp.0 as *const DRAWITEMSTRUCT));
+            return LRESULT(1);
+        }
         WM_DECK_EVENT => d.pump_events(),
         WM_DPICHANGED => {
             d.dpi = (wp.0 & 0xffff) as u32;
             d.make_fonts();
+            deck_ui::restyle(hwnd);
             let r = &*(lp.0 as *const RECT);
             let _ = SetWindowPos(hwnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         WM_CLOSE => {
             let warn = |s: &&Session| !s.closed && s.target.settings.b("WarnOnClose", true);
             let live = d.sessions.iter().filter(warn).count();
-            if live == 0 || d.confirm(&format!("Close RustuTTY and its {live} open sessions?")) {
+            if live == 0 || d.confirm(&format!("Close RUSTuTTY and its {live} open sessions?")) {
                 let _ = DestroyWindow(hwnd);
             }
         }
@@ -1804,6 +1955,7 @@ fn forward_key(kind: &str, spec: &str) -> String {
 fn main() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        deck_ui::init(!cfg!(feature = "test-hooks"));
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
         let cursor = LoadCursorW(None, IDC_IBEAM).unwrap_or_default();
         let arrow = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
@@ -1812,8 +1964,7 @@ fn main() {
             hInstance: instance,
             hIcon: LoadIconW(Some(instance), PCWSTR(1 as *const u16)).unwrap_or_default(),
             hCursor: arrow,
-            hbrBackground: HBRUSH((COLOR_BTNFACE.0 + 1) as usize as *mut _),
-            lpszClassName: w!("RustuTTYMain"),
+            lpszClassName: w!("RUSTuTTYMain"),
             ..Default::default()
         });
         RegisterClassW(&WNDCLASSW {
@@ -1821,27 +1972,28 @@ fn main() {
             lpfnWndProc: Some(content_proc),
             hInstance: instance,
             hCursor: cursor,
-            lpszClassName: w!("RustuTTYContent"),
+            lpszClassName: w!("RUSTuTTYContent"),
             ..Default::default()
         });
         // Test windows open off-screen, so they don't flash up over someone's work.
         let x = if cfg!(feature = "test-hooks") { -4000 } else { CW_USEDEFAULT };
         let ex = if cfg!(feature = "test-hooks") { WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW } else { WINDOW_EX_STYLE(0) };
-        let main = CreateWindowExW(ex, w!("RustuTTYMain"), w!("RustuTTY"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        let main = CreateWindowExW(ex, w!("RUSTuTTYMain"), w!("RUSTuTTY"), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             x, CW_USEDEFAULT, 1200, 760, None, None, Some(instance), None).unwrap();
         let child = |class: PCWSTR, text: PCWSTR, style: u32, ex: u32, id: usize| {
             CreateWindowExW(WINDOW_EX_STYLE(ex), class, text, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style), 0, 0, 10, 10,
                 Some(main), Some(HMENU(id as *mut _)), Some(instance), None).unwrap()
         };
         let listbox = (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32 | WS_VSCROLL.0 | WS_TABSTOP.0;
-        let content = child(w!("RustuTTYContent"), w!(""), WS_VSCROLL.0, 0, 0);
-        let edit = child(w!("EDIT"), w!(""), ES_AUTOHSCROLL as u32 | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, 99);
+        let content = child(w!("RUSTuTTYContent"), w!(""), WS_VSCROLL.0, 0, 0);
+        let edit = child(w!("EDIT"), w!(""), ES_AUTOHSCROLL as u32 | WS_TABSTOP.0, 0, 99);
         let _ = SendMessageW(edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(w!("user@host").as_ptr() as isize)));
         let open = child(w!("BUTTON"), w!("Open"), BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 0, ID_OPEN);
-        let l1 = child(w!("STATIC"), w!("Open sessions"), 0, 0, 0);
-        let list = child(w!("LISTBOX"), w!(""), listbox | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32, WS_EX_CLIENTEDGE.0, ID_LIST);
-        let l2 = child(w!("STATIC"), w!("Saved sessions"), 0, 0, 0);
-        let saved_list = child(w!("LISTBOX"), w!(""), listbox, WS_EX_CLIENTEDGE.0, ID_SAVED);
+        let l1 = child(w!("STATIC"), w!("OPEN SESSIONS"), 0, 0, 0);
+        let list = child(w!("LISTBOX"), w!(""), listbox | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32, 0, ID_LIST);
+        let l2 = child(w!("STATIC"), w!("SAVED SESSIONS"), 0, 0, 0);
+        let saved_list = child(w!("LISTBOX"), w!(""), listbox | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32, 0, ID_SAVED);
+        let theme_button = child(w!("BUTTON"), w!(""), BS_PUSHBUTTON as u32, 0, IDM_THEME);
         let buttons = [(w!("Copy"), ID_COPY), (w!("Paste"), ID_PASTE), (w!("Copy all"), ID_COPY_ALL), (w!("Paste to all"), ID_PASTE_ALL), (w!("Settings"), ID_SETTINGS)]
             .map(|(t, id)| child(w!("BUTTON"), t, BS_PUSHBUTTON as u32, 0, id));
 
@@ -1850,8 +2002,10 @@ fn main() {
         let store: Arc<dyn HostKeyStore> = if test { Arc::new(MemoryStore::default()) } else { Arc::new(RegistryStore) };
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let d = Box::into_raw(Box::new(Deck {
-            main, content, edit, open, list, saved_list, labels: [l1, l2], buttons,
-            gui_font: HFONT::default(), font: HFONT::default(), bold: HFONT::default(),
+            main, content, edit, open, list, saved_list, labels: [l1, l2], buttons, theme_button,
+            cards: [RECT::default(); 3], logo: HICON::default(),
+            gui_font: HFONT::default(), section_font: HFONT::default(), title_font: HFONT::default(),
+            font: HFONT::default(), bold: HFONT::default(),
             wide_font: HFONT::default(), wide_bold: HFONT::default(),
             cell: (8, 16), dpi: GetDpiForWindow(main).max(96), font_in_use: (String::new(), 0),
             sessions: Vec::new(), active: None, next_id: 1, saved,
@@ -1862,6 +2016,8 @@ fn main() {
         DECK.store(d, Ordering::Release);
         let d = &mut *d;
         d.make_fonts();
+        d.show_theme();
+        deck_ui::restyle(main);
         for (name, _) in &d.saved {
             let text = wide(name);
             SendMessageW(d.saved_list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));

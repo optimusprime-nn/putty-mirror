@@ -11,6 +11,7 @@ path = "src/main.rs"
 embed-resource = "3"
 
 [dependencies]
+deck-ui = { path = "../deck-ui" }
 winreg = "0.56"
 windows = { version = "0.62", features = [
     "Win32_Foundation",

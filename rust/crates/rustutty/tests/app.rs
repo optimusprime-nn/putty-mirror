@@ -1,4 +1,4 @@
-//! Drives a real RustuTTY window. The build under test uses a private clipboard
+//! Drives a real RUSTuTTY window. The build under test uses a private clipboard
 //! and never takes focus, and everything here is addressed to that process's
 //! own windows, so it can run while someone is using the PC.
 
@@ -138,7 +138,7 @@ fn window_of(pid: u32) -> Option<HWND> {
     all.into_iter().map(|h| HWND(h as *mut _)).find(|&h| {
         let mut p = 0;
         unsafe { GetWindowThreadProcessId(h, Some(&mut p)) };
-        p == pid && class_of(h) == "RustuTTYMain"
+        p == pid && class_of(h) == "RUSTuTTYMain"
     })
 }
 
@@ -172,7 +172,7 @@ impl App {
         let (content, edit) = loop {
             let kids = children(main);
             let find = |c: &str| kids.iter().find(|&&h| class_of(h) == c).copied();
-            if let (Some(c), Some(e), true) = (find("RustuTTYContent"), find("Edit"), kids.len() >= 11) {
+            if let (Some(c), Some(e), true) = (find("RUSTuTTYContent"), find("Edit"), kids.len() >= 11) {
                 break (c, e);
             }
             assert!(Instant::now() < end, "controls never appeared");

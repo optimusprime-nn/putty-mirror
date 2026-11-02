@@ -1,5 +1,5 @@
 //! Host key checking. Keys PuTTY already trusts are honoured from its own
-//! store, which is only read. Keys accepted here go in RustuTTY's own store.
+//! store, which is only read. Keys accepted here go in RUSTuTTY's own store.
 
 use crate::config::escape_key;
 use russh::keys::ssh_key::public::KeyData;
@@ -18,7 +18,7 @@ pub enum Verdict {
 pub trait HostKeyStore: Send + Sync {
     /// The value PuTTY stored under this name, in PuTTY's format.
     fn putty(&self, name: &str) -> Option<String>;
-    /// The value RustuTTY stored under this name, in OpenSSH format.
+    /// The value RUSTuTTY stored under this name, in OpenSSH format.
     fn deck(&self, name: &str) -> Option<String>;
     fn remember(&self, name: &str, value: &str) -> anyhow::Result<()>;
 }

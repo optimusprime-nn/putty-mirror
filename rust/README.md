@@ -1,4 +1,4 @@
-# RustuTTY
+# RUSTuTTY
 
 PuTTY's programs rewritten in Rust, with terminal sessions in one window, listed
 on the left. Every session runs inside one process. SSH and its cryptography come
@@ -26,6 +26,9 @@ session. Right-click the saved sessions list to change a session's settings or
 make a new one. `telnet://host`, `rlogin://host`, `supdup://host`, `raw://host:port`
 and `serial://COM3` also work. Login prompts appear in the terminal, as they do
 in PuTTY.
+
+The window starts dark. The button at the top of the sidebar, or Light Appearance
+in the window menu, switches between dark and light, and the choice is kept.
 
     rustutty -ssh user@host
     rustutty -load "saved session"
@@ -140,7 +143,7 @@ tools built, and no Pageant running.
 
 ## Licence
 
-RustuTTY is an unofficial program, not connected with the PuTTY project. It
+RUSTuTTY is an unofficial program, not connected with the PuTTY project. It
 follows PuTTY, copyright Simon Tatham and contributors, under the MIT
 licence: see `LICENCE`. It is unofficial, and not a PuTTY project release. russh
 and alacritty_terminal are under the Apache 2.0 licence; before redistributing

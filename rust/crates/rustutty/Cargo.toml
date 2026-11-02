@@ -13,6 +13,7 @@ embed-resource = "3"
 
 [dependencies]
 deck-core = { path = "../deck-core" }
+deck-ui = { path = "../deck-ui" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(windows)'.dependencies]

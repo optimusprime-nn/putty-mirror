@@ -6,7 +6,7 @@
 use deck_core::options::{Kind as OptionKind, OPTIONS};
 
 pub const NONE: char = '\0';
-pub const APP: &str = "RustuTTY";
+pub const APP: &str = "RUSTuTTY";
 
 #[derive(Clone, Debug)]
 pub enum Kind {
@@ -477,7 +477,7 @@ pub fn build(mid: bool, protocol: &str, user: &str) -> Cbox {
     b.check(s, "System menu appears on ALT alone", 'l', flag("AltOnly", false));
     b.check(s, "Ensure window is always on top", 'e', flag("AlwaysOnTop", false));
     b.check(s, "Full screen on Alt-Enter", 'f', flag("FullScreenOnAltEnter", false));
-    // RustuTTY's own
+    // RUSTuTTY's own
     b.check(s, "Warn before pasting several lines", 'p', flag("PasteWarnLines", true));
     b.check(s, "Resize the window to fit a new session", 'r', flag("FitWindow", false));
 
