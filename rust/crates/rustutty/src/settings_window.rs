@@ -2259,7 +2259,8 @@ mod tests {
                 grow(w + 300, h + 200);
                 assert!(d.size.0 > WIDTH && d.size.1 > HEIGHT);
                 assert_eq!(d.path, "Terminal", "the same panel stays open");
-                assert_eq!(bottom(d.tree).bottom - tree.bottom, 200, "the tree takes the new height");
+                // sizes round to whole dialog units, so this depends on the font's scale
+                assert!((bottom(d.tree).bottom - tree.bottom - 200).abs() <= d.by / 8 + 1, "the tree takes the new height");
                 assert_eq!(bottom(d.tree).right - bottom(d.tree).left, tree.right - tree.left, "and keeps its width");
                 assert_eq!(d.settings.s("TerminalType", ""), "vt220", "what was changed is still changed");
                 let widest = d.panel.iter().map(|&h| bottom(h).right).max().unwrap();
