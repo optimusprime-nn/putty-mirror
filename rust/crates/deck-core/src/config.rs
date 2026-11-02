@@ -198,20 +198,103 @@ pub fn load_sessions() -> Vec<(String, Target)> {
     all
 }
 
+/// What `delete_session` did.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Deleted {
+    /// Gone from RustuTTY's key, and PuTTY has no session of this name.
+    Done,
+    /// RustuTTY's copy is gone, and PuTTY's own session of this name shows again.
+    PuttyRemains,
+    /// Only PuTTY has it, and PuTTY's key is never changed.
+    OnlyInPutty,
+    Missing,
+}
+
 /// Saves a session in RustuTTY's key. Text and numbers keep PuTTY's types.
+/// "Default Settings" is a session like any other here.
 #[cfg(windows)]
 pub fn save_session(name: &str, settings: &Settings) -> anyhow::Result<()> {
-    use winreg::{enums::*, RegKey};
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    save_in(&winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER), name, settings)
+}
+
+/// Deletes a session from RustuTTY's key. PuTTY's key is only ever read.
+#[cfg(windows)]
+pub fn delete_session(name: &str) -> anyhow::Result<Deleted> {
+    delete_in(&winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER), name)
+}
+
+/// A saved session's settings, RustuTTY's copy first.
+#[cfg(windows)]
+pub fn load_session(name: &str) -> Option<Settings> {
+    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+    let key = escape_key(name);
+    read_settings(&hkcu, DECK_KEY, &key).or_else(|| read_settings(&hkcu, PUTTY_KEY, &key))
+}
+
+/// "Default Settings", which is empty if neither program has saved it.
+#[cfg(windows)]
+pub fn default_settings() -> Settings {
+    load_session("Default Settings").unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn save_in(root: &winreg::RegKey, name: &str, settings: &Settings) -> anyhow::Result<()> {
+    use winreg::enums::*;
     let path = format!(r"{DECK_KEY}\Sessions\{}", escape_key(name));
-    let (key, _) = hkcu.create_subkey_with_flags(path, KEY_SET_VALUE)?;
+    let (key, _) = root.create_subkey_with_flags(path, KEY_SET_VALUE | KEY_QUERY_VALUE)?;
     for (k, v) in settings.iter() {
         match v {
             Value::Str(s) => key.set_value(k, s)?,
             Value::Int(i) => key.set_value(k, i)?,
         }
     }
+    // Saving over a session replaces it, as in PuTTY, so its old values go
+    let stale: Vec<String> = key
+        .enum_values()
+        .flatten()
+        .filter(|(n, d)| !settings.has(n) && matches!(d.vtype, REG_SZ | REG_DWORD))
+        .map(|(n, _)| n)
+        .collect();
+    for name in stale {
+        key.delete_value(name)?;
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn delete_in(root: &winreg::RegKey, name: &str) -> anyhow::Result<Deleted> {
+    use winreg::enums::*;
+    let key = escape_key(name);
+    let exists = |parent: &str| root.open_subkey_with_flags(format!(r"{parent}\Sessions\{key}"), KEY_READ).is_ok();
+    let in_putty = exists(PUTTY_KEY);
+    if !exists(DECK_KEY) {
+        return Ok(if in_putty { Deleted::OnlyInPutty } else { Deleted::Missing });
+    }
+    root.delete_subkey_all(format!(r"{DECK_KEY}\Sessions\{key}"))?;
+    Ok(if in_putty { Deleted::PuttyRemains } else { Deleted::Done })
+}
+
+#[cfg(windows)]
+fn read_settings(root: &winreg::RegKey, parent: &str, key: &str) -> Option<Settings> {
+    use winreg::enums::*;
+    let k = root.open_subkey_with_flags(format!(r"{parent}\Sessions\{key}"), KEY_READ).ok()?;
+    let mut settings = Settings::default();
+    for (value_name, data) in k.enum_values().flatten() {
+        match data.vtype {
+            REG_DWORD => {
+                if let Ok(v) = k.get_value::<u32, _>(&value_name) {
+                    settings.set(&value_name, Value::Int(v));
+                }
+            }
+            _ => {
+                if let Ok(v) = k.get_value::<String, _>(&value_name) {
+                    settings.set(&value_name, Value::Str(v));
+                }
+            }
+        }
+    }
+    Some(settings)
 }
 
 #[cfg(windows)]
@@ -227,23 +310,9 @@ fn read_sessions(parent: &str) -> Vec<(String, Target)> {
         if name == "Default Settings" {
             continue;
         }
-        let Ok(k) = root.open_subkey_with_flags(&key, KEY_READ) else { continue };
-        let mut settings = Settings::default();
-        for (value_name, data) in k.enum_values().flatten() {
-            match data.vtype {
-                REG_DWORD => {
-                    if let Ok(v) = k.get_value::<u32, _>(&value_name) {
-                        settings.set(&value_name, Value::Int(v));
-                    }
-                }
-                _ => {
-                    if let Ok(v) = k.get_value::<String, _>(&value_name) {
-                        settings.set(&value_name, Value::Str(v));
-                    }
-                }
-            }
+        if let Some(settings) = read_settings(&hkcu, parent, &key) {
+            out.push((name, target_from(settings)));
         }
-        out.push((name, target_from(settings)));
     }
     out
 }
@@ -309,5 +378,77 @@ mod tests {
         assert_eq!((t.protocol, t.host.as_str()), (Protocol::Serial, "COM3"));
         assert!(target_from(saved(&[("Protocol", "ssh")])).refuse.unwrap().contains("no host"));
         assert!(target_from(saved(&[("HostName", "h"), ("Protocol", "odd")])).refuse.unwrap().contains("odd"));
+    }
+
+    /// A private hive in a temporary file, so the real registry is never touched.
+    #[cfg(windows)]
+    struct Hive(Option<winreg::RegKey>, std::path::PathBuf);
+
+    #[cfg(windows)]
+    impl Hive {
+        fn new(tag: &str) -> Hive {
+            #[link(name = "advapi32")]
+            extern "system" {
+                fn RegLoadAppKeyW(file: *const u16, key: *mut winreg::HKEY, access: u32, options: u32, reserved: u32) -> i32;
+            }
+            let path = std::env::temp_dir().join(format!("rustutty-{tag}-{}.hive", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain([0]).collect();
+            let mut key: winreg::HKEY = std::ptr::null_mut();
+            let err = unsafe { RegLoadAppKeyW(wide.as_ptr(), &mut key, winreg::enums::KEY_ALL_ACCESS, 0, 0) };
+            assert_eq!(err, 0);
+            Hive(Some(winreg::RegKey::predef(key)), path)
+        }
+
+        fn root(&self) -> &winreg::RegKey {
+            self.0.as_ref().unwrap()
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for Hive {
+        fn drop(&mut self) {
+            self.0 = None;
+            for suffix in ["", ".LOG1", ".LOG2", ".blf"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.1.display()));
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn deleting_only_touches_our_key() {
+        let hive = Hive::new("delete");
+        let root = hive.root();
+        let s = saved(&[("HostName", "h")]);
+        let puttys = format!(r"{PUTTY_KEY}\Sessions\{}", escape_key("both ways"));
+        root.create_subkey(&puttys).unwrap();
+        root.create_subkey(format!(r"{PUTTY_KEY}\Sessions\theirs")).unwrap();
+
+        assert_eq!(delete_in(root, "nothing").unwrap(), Deleted::Missing);
+        assert_eq!(delete_in(root, "theirs").unwrap(), Deleted::OnlyInPutty);
+        assert!(root.open_subkey(format!(r"{PUTTY_KEY}\Sessions\theirs")).is_ok());
+
+        save_in(root, "ours", &s).unwrap();
+        assert_eq!(read_settings(root, DECK_KEY, "ours").unwrap().s("HostName", ""), "h");
+        assert_eq!(delete_in(root, "ours").unwrap(), Deleted::Done);
+        assert!(read_settings(root, DECK_KEY, "ours").is_none());
+
+        save_in(root, "both ways", &s).unwrap();
+        assert_eq!(delete_in(root, "both ways").unwrap(), Deleted::PuttyRemains);
+        assert!(root.open_subkey(&puttys).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn saving_over_a_session_replaces_it() {
+        let hive = Hive::new("save");
+        let root = hive.root();
+        save_in(root, "s", &saved(&[("HostName", "a"), ("UserName", "old")])).unwrap();
+        save_in(root, "s", &saved(&[("HostName", "b")])).unwrap();
+        let s = read_settings(root, DECK_KEY, "s").unwrap();
+        assert_eq!((s.s("HostName", ""), s.has("UserName")), ("b".to_string(), false));
+        save_in(root, "Default Settings", &saved(&[("HostName", "c")])).unwrap();
+        assert!(read_settings(root, DECK_KEY, &escape_key("Default Settings")).is_some());
     }
 }

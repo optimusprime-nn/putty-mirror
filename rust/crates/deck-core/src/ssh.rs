@@ -935,6 +935,11 @@ pub(crate) async fn run(target: &Target, store: Arc<dyn HostKeyStore>, io: Io) -
                     break "Session closed.".to_string();
                 }
                 Some(Command::Input(bytes) | Command::Reply(bytes)) => channel.data_bytes(bytes).await?,
+                Some(Command::Special(crate::session::Special::Signal(name))) => channel.signal(russh::Sig::Custom(name.to_string())).await?,
+                Some(Command::Special(crate::session::Special::Rekey)) => handle.rekey_soon().await?,
+                // russh can't send IGNORE: a keepalive also keeps the connection busy
+                Some(Command::Special(crate::session::Special::Ignore)) => handle.send_keepalive(false).await?,
+                Some(Command::Special(_)) => {}
                 Some(Command::Resize { cols: c, rows: r }) => {
                     if (c, r) != (cols, rows) {
                         (cols, rows) = (c, r);

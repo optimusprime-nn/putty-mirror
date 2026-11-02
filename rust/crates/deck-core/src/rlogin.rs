@@ -61,7 +61,7 @@ pub(crate) async fn run(target: &Target, mut conn: Conn, mut io: Io) -> anyhow::
             cmd = io.commands.recv() => match cmd {
                 None | Some(Command::Close) => return Ok("Session closed.".into()),
                 // answers reach here as Input, once the session is ready
-                Some(Command::Reply(_)) => {}
+                Some(Command::Reply(_) | Command::Special(_)) => {}
                 Some(Command::Input(b)) => conn.write_all(&b).await?,
                 Some(Command::Resize { cols, rows }) => {
                     (io.cols, io.rows) = (cols, rows);

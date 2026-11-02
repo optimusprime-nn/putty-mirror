@@ -209,8 +209,8 @@ pub const OPTIONS: &[Option_] = &[
     o("Serial", "Flow control", "SerialFlowControl", Kind::Choice(1, FLOW)),
 ];
 
-/// Acted on, with no setting to show. The proxy password can't be edited here:
-/// it's typed when needed, or kept as PuTTY saved it. SSH logs hold no passwords
+/// Acted on, with no entry in `OPTIONS`. The proxy password is typed when needed,
+/// or kept as saved, and the settings window's masked box edits it. SSH logs hold no passwords
 /// or packets, so the `SSHLogOmit` settings are always met.
 pub const AUTOMATIC: &[&str] = &["ProxyPassword", "PingInterval", "ProxyLogToTerm", "Present", "SSHLogOmitData", "SSHLogOmitPasswords", "NoRemoteResize", "WinNameAlways"];
 

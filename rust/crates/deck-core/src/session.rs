@@ -20,7 +20,65 @@ pub enum Command {
     /// The terminal answering the host, which is not the person typing.
     Reply(Vec<u8>),
     Resize { cols: u32, rows: u32 },
+    Special(Special),
     Close,
+}
+
+/// PuTTY's Special Command menu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Special {
+    Break,
+    Signal(&'static str),
+    Rekey,
+    Ignore,
+    /// A Telnet command, sent after IAC.
+    Telnet(u8),
+}
+
+/// What the Special Command menu holds for a protocol, in PuTTY's order. No
+/// command is a separator. russh can't send SSH's break request, so that's left out.
+pub fn specials(protocol: &Protocol) -> &'static [(&'static str, Option<Special>)] {
+    const SSH: &[(&str, Option<Special>)] = &[
+        ("Repeat key exchange", Some(Special::Rekey)),
+        ("IGNORE message", Some(Special::Ignore)),
+        ("", None),
+        ("SIGINT (Interrupt)", Some(Special::Signal("INT"))),
+        ("SIGTERM (Terminate)", Some(Special::Signal("TERM"))),
+        ("SIGKILL (Kill)", Some(Special::Signal("KILL"))),
+        ("SIGQUIT (Quit)", Some(Special::Signal("QUIT"))),
+        ("SIGHUP (Hangup)", Some(Special::Signal("HUP"))),
+        ("SIGABRT", Some(Special::Signal("ABRT"))),
+        ("SIGALRM", Some(Special::Signal("ALRM"))),
+        ("SIGFPE", Some(Special::Signal("FPE"))),
+        ("SIGILL", Some(Special::Signal("ILL"))),
+        ("SIGPIPE", Some(Special::Signal("PIPE"))),
+        ("SIGSEGV", Some(Special::Signal("SEGV"))),
+        ("SIGUSR1", Some(Special::Signal("USR1"))),
+        ("SIGUSR2", Some(Special::Signal("USR2"))),
+    ];
+    const TELNET: &[(&str, Option<Special>)] = &[
+        ("Are You There", Some(Special::Telnet(246))),
+        ("Break", Some(Special::Telnet(243))),
+        ("Synch", Some(Special::Telnet(242))),
+        ("Erase Character", Some(Special::Telnet(247))),
+        ("Erase Line", Some(Special::Telnet(248))),
+        ("Go Ahead", Some(Special::Telnet(249))),
+        ("No Operation", Some(Special::Telnet(241))),
+        ("", None),
+        ("Abort Process", Some(Special::Telnet(238))),
+        ("Abort Output", Some(Special::Telnet(245))),
+        ("Interrupt Process", Some(Special::Telnet(244))),
+        ("Suspend Process", Some(Special::Telnet(237))),
+        ("", None),
+        ("End Of Record", Some(Special::Telnet(239))),
+        ("End Of File", Some(Special::Telnet(236))),
+    ];
+    match protocol {
+        Protocol::Ssh => SSH,
+        Protocol::Telnet => TELNET,
+        Protocol::Serial => &[("Break", Some(Special::Break))],
+        _ => &[],
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,7 +142,7 @@ impl Io {
                     self.cols = cols;
                     self.rows = rows;
                 }
-                Command::Reply(_) => {}
+                Command::Reply(_) | Command::Special(_) => {}
                 Command::Input(mut bytes) => {
                     pending.extend_from_slice(&bytes);
                     bytes.zeroize();

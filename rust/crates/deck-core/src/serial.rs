@@ -1,9 +1,9 @@
 //! Serial sessions, using PuTTY's `Serial*` settings.
 
 use crate::config::Target;
-use crate::session::{Command, Event, Io};
+use crate::session::{Command, Event, Io, Special};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_serial::{DataBits, FlowControl, Parity, SerialPortBuilderExt, StopBits};
+use tokio_serial::{DataBits, FlowControl, Parity, SerialPort, SerialPortBuilderExt, StopBits};
 
 pub(crate) async fn run(target: &Target, mut io: Io) -> anyhow::Result<String> {
     let s = &target.settings;
@@ -47,6 +47,12 @@ pub(crate) async fn run(target: &Target, mut io: Io) -> anyhow::Result<String> {
                 None | Some(Command::Close) => return Ok("Session closed.".into()),
                 // answers reach here as Input, once the session is ready
                 Some(Command::Reply(_)) => {}
+                Some(Command::Special(Special::Break)) => {
+                    port.set_break()?;
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    port.clear_break()?;
+                }
+                Some(Command::Special(_)) => {}
                 Some(Command::Input(b)) => port.write_all(&b).await?,
                 Some(Command::Resize { .. }) => {}
             },

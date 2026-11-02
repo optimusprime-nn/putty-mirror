@@ -6,7 +6,7 @@ mod printer;
 mod settings_window;
 
 use deck_core::compose::{compose, cyrillic};
-use deck_core::config::{load_sessions, save_session, target_from, Protocol, Target};
+use deck_core::config::{load_sessions, target_from, Protocol, Target};
 use deck_core::hostkeys::{HostKeyStore, MemoryStore, RegistryStore};
 use deck_core::filter::BellLimit;
 use deck_core::keys::{shortcut, Key, KeyConfig, Mods, Shortcut};
@@ -51,10 +51,25 @@ const ID_PASTE: usize = 104;
 const ID_COPY_ALL: usize = 105;
 const ID_PASTE_ALL: usize = 106;
 const ID_SETTINGS: usize = 107;
-const ID_MENU_DUPLICATE: usize = 110;
 const ID_MENU_CLOSE: usize = 111;
 const ID_MENU_NEW: usize = 112;
 const ID_MENU_EDIT: usize = 113;
+// PuTTY's window menu. The low four bits stay clear, as Windows uses them in WM_SYSCOMMAND.
+const IDM_SHOWLOG: usize = 0x0010;
+const IDM_NEWSESS: usize = 0x0020;
+const IDM_DUPSESS: usize = 0x0030;
+const IDM_RESTART: usize = 0x0040;
+const IDM_RECONF: usize = 0x0050;
+const IDM_CLRSB: usize = 0x0060;
+const IDM_RESET: usize = 0x0070;
+const IDM_HELP: usize = 0x0140;
+const IDM_ABOUT: usize = 0x0150;
+const IDM_SPECIAL_MIN: usize = 0x0400;
+const IDM_SPECIAL_MAX: usize = 0x0800;
+const IDM_COPYALL: usize = 0x0170;
+const IDM_FULLSCREEN: usize = 0x0180;
+const IDM_SAVED_MIN: usize = 0x1000;
+const IDM_SAVED_MAX: usize = 0xF000;
 
 const SIDEBAR: i32 = 240;
 const PAD: i32 = 6;
@@ -81,6 +96,8 @@ struct Session {
     /// The job failed or ran too long, so the rest of it is dropped.
     job_dead: bool,
     printed: usize,
+    /// What the Event Log shows.
+    log: Vec<String>,
 }
 
 impl Session {
@@ -136,6 +153,8 @@ struct Deck {
     full_screen: Option<(WINDOWPLACEMENT, i32)>,
     /// The row whose close box is held down.
     close_held: Option<usize>,
+    /// Items in the system menu that are Windows' own.
+    system_items: i32,
 }
 
 static DECK: AtomicPtr<Deck> = AtomicPtr::new(std::ptr::null_mut());
@@ -538,6 +557,7 @@ impl Deck {
             let sel = self.active.map_or(usize::MAX, |i| i);
             SendMessageW(self.list, LB_SETCURSEL, Some(WPARAM(sel)), None);
             let title = match self.active.and_then(|i| self.sessions.get(i)) {
+                Some(s) if s.closed => "RustuTTY (inactive)".to_string(),
                 Some(s) => format!("{} - RustuTTY", s.label()),
                 None => "RustuTTY".to_string(),
             };
@@ -545,7 +565,8 @@ impl Deck {
         }
     }
 
-    fn open_target(&mut self, target: Target) {
+    /// Starts a connection. Its events go to the inbox under the id returned.
+    fn connect(&mut self, target: &Target) -> (u64, UnboundedSender<Command>) {
         let id = self.next_id;
         self.next_id += 1;
         let (cols, rows) = self.grid();
@@ -562,7 +583,24 @@ impl Deck {
                 }
             }
         });
-        let tx = session::spawn(self.rt.handle(), target.clone(), self.store.clone(), (cols, rows), sink);
+        (id, session::spawn(self.rt.handle(), target.clone(), self.store.clone(), (cols, rows), sink))
+    }
+
+    /// As PuTTY: the screen stays, and the new connection starts below it.
+    fn restart(&mut self, i: usize) {
+        let Some(target) = self.sessions.get(i).filter(|s| s.closed).map(|s| s.target.clone()) else { return };
+        let (id, tx) = self.connect(&target);
+        let s = &mut self.sessions[i];
+        (s.id, s.tx, s.closed) = (id, tx, false);
+        s.log.push("----- Session restarted -----".to_string());
+        s.term.feed(b"\x1b[!p\r\n");
+        self.refresh_list();
+        self.redraw();
+    }
+
+    fn open_target(&mut self, target: Target) {
+        let (id, tx) = self.connect(&target);
+        let (cols, rows) = self.grid();
         let settings = &target.settings;
         // a session with a locked size keeps the one it was saved with
         let locked = settings.i("LockSize", 0) == 1;
@@ -581,7 +619,7 @@ impl Deck {
         let first = self.sessions.is_empty();
         let sized = settings.has("TermWidth") && settings.has("TermHeight");
         let fit = settings.b("FitWindow", false);
-        self.sessions.push(Session { id, target, title, term, tx, closed: false, bell: false, keys, bells, job: None, job_dead: false, printed: 0 });
+        self.sessions.push(Session { id, target, title, term, tx, closed: false, bell: false, keys, bells, job: None, job_dead: false, printed: 0, log: Vec::new() });
         self.select(self.sessions.len() - 1);
         // the first session sets the window's size only if it asks to
         if first && fit && sized && self.full_screen.is_none() && !cfg!(feature = "test-hooks") {
@@ -651,8 +689,14 @@ impl Deck {
         for (id, event) in events {
             let Some(s) = self.sessions.iter_mut().find(|s| s.id == id) else { continue };
             match event {
-                Event::Output(bytes) | Event::Local(bytes) => s.term.feed(&bytes),
+                Event::Output(bytes) => s.term.feed(&bytes),
+                Event::Local(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    s.log.extend(text.lines().map(deck_core::session::clean).filter(|l| !l.trim().is_empty()));
+                    s.term.feed(&bytes);
+                }
                 Event::Closed(why) => {
+                    s.log.push(deck_core::session::clean(&why));
                     s.term.stop_printing();
                     s.job = None;
                     s.term.feed(format!("\r\n\x1b[1m[{}]\x1b[0m\r\n", deck_core::session::clean(&why)).as_bytes());
@@ -728,21 +772,173 @@ impl Deck {
             Some((n, t)) => (n.clone(), t.settings.clone()),
             None => (String::new(), Settings::default()),
         };
-        let (outcome, name, mut settings) = settings_window::edit(self.main, self.gui_font, &name, settings);
+        let (outcome, _, mut settings) = settings_window::edit(self.main, self.gui_font, &name, settings);
+        // Save and Delete happen in the dialog. A test build reads no registry.
+        if !cfg!(feature = "test-hooks") {
+            self.reload_saved();
+        }
         if outcome == Outcome::Cancelled {
             return;
         }
         if settings.s("Protocol", "").is_empty() {
             settings.set("Protocol", Value::Str("ssh".into()));
         }
-        if outcome == Outcome::Save && !name.trim().is_empty() {
-            if let Err(e) = save_session(name.trim(), &settings) {
-                self.confirm(&format!("Could not save the session: {e}"));
-            }
+        self.open_target(target_from(settings));
+    }
+
+    fn change_settings(&mut self) {
+        let Some(i) = self.active else { return };
+        let new = settings_window::reconfigure(self.main, self.gui_font, self.sessions[i].target.settings.clone());
+        if !cfg!(feature = "test-hooks") {
             self.reload_saved();
         }
-        if outcome == Outcome::Open {
-            self.open_target(target_from(settings));
+        let Some(new) = new else { return };
+        let s = &mut self.sessions[i];
+        (s.keys, s.bells) = (KeyConfig::new(&new), BellLimit::new(&new));
+        s.target.settings = new;
+        self.apply_window_settings();
+        self.make_fonts();
+        self.layout();
+        self.redraw();
+    }
+
+    fn notice(&self, title: PCWSTR, text: &str) {
+        if !cfg!(feature = "test-hooks") {
+            unsafe { MessageBoxW(Some(self.main), PCWSTR(wide(text).as_ptr()), title, MB_OK | MB_ICONINFORMATION) };
+        }
+    }
+
+    /// A command from the window menu. Returns false if it isn't one.
+    fn window_command(&mut self, id: usize) -> bool {
+        match id {
+            IDM_SHOWLOG => {
+                let log = self.current().map_or(String::new(), |s| s.log.join("\n"));
+                self.notice(w!("RustuTTY Event Log"), if log.is_empty() { "Nothing logged." } else { &log });
+            }
+            IDM_NEWSESS => self.edit_saved(None),
+            IDM_DUPSESS => {
+                if let Some(t) = self.current().map(|s| s.target.clone()) {
+                    self.open_target(t);
+                }
+            }
+            IDM_RESTART => {
+                if let Some(i) = self.active {
+                    self.restart(i);
+                }
+            }
+            IDM_RECONF => self.change_settings(),
+            IDM_COPYALL => self.copy_all(),
+            IDM_CLRSB | IDM_RESET => {
+                if let Some(s) = self.current() {
+                    s.term.feed(if id == IDM_CLRSB { b"\x1b[3J" } else { b"\x1bc" });
+                }
+                self.redraw();
+            }
+            IDM_FULLSCREEN => self.toggle_full_screen(),
+            IDM_HELP => self.notice(w!("RustuTTY Help"), "RustuTTY has no help file yet. See the README."),
+            IDM_ABOUT => self.notice(w!("About RustuTTY"), concat!("RustuTTY ", env!("CARGO_PKG_VERSION"), "\n\nPuTTY's programs rewritten in Rust.\nAn unofficial program, not connected with the PuTTY project.")),
+            n if (IDM_SPECIAL_MIN..IDM_SPECIAL_MAX).contains(&n) => {
+                let special = self.current().and_then(|s| Some((s.tx.clone(), session::specials(&s.target.protocol).get((n - IDM_SPECIAL_MIN) / 0x10)?.1?)));
+                if let Some((tx, special)) = special {
+                    let _ = tx.send(Command::Special(special));
+                }
+            }
+            n if (IDM_SAVED_MIN..IDM_SAVED_MAX).contains(&n) => {
+                if let Some((_, t)) = self.saved.get((n - IDM_SAVED_MIN) / 0x10) {
+                    self.open_target(t.clone());
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// PuTTY's window menu, in its order.
+    fn fill_window_menu(&self, m: HMENU) {
+        let active = self.active.and_then(|i| self.sessions.get(i));
+        let closed = active.is_some_and(|s| s.closed);
+        let specials = active.filter(|s| !s.closed).map_or(&[][..], |s| session::specials(&s.target.protocol));
+        unsafe {
+            let _ = AppendMenuW(m, MF_STRING, ID_COPY, w!("&Copy"));
+            let _ = AppendMenuW(m, MF_STRING, ID_PASTE, w!("&Paste"));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            if let (false, Ok(menu), Ok(more)) = (specials.is_empty(), CreatePopupMenu(), CreatePopupMenu()) {
+                for (i, (label, special)) in specials.iter().enumerate() {
+                    // PuTTY keeps signals with no description in a submenu
+                    let target = if label.starts_with("SIG") && !label.contains('(') { more } else { menu };
+                    let text = wide(label);
+                    if special.is_some() {
+                        let _ = AppendMenuW(target, MF_STRING, IDM_SPECIAL_MIN + i * 0x10, PCWSTR(text.as_ptr()));
+                    } else {
+                        let _ = AppendMenuW(target, MF_SEPARATOR, 0, None);
+                    }
+                }
+                if GetMenuItemCount(Some(more)) > 0 {
+                    let _ = AppendMenuW(menu, MF_POPUP, more.0 as usize, w!("More signals"));
+                } else {
+                    let _ = DestroyMenu(more);
+                }
+                let _ = AppendMenuW(m, MF_POPUP, menu.0 as usize, w!("Special Command"));
+                let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            }
+            let _ = AppendMenuW(m, MF_STRING, IDM_SHOWLOG, w!("&Event Log"));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(m, MF_STRING, IDM_NEWSESS, w!("Ne&w Session..."));
+            if closed {
+                let _ = AppendMenuW(m, MF_STRING, IDM_RESTART, w!("&Restart Session"));
+            }
+            let _ = AppendMenuW(m, MF_STRING, IDM_DUPSESS, w!("&Duplicate Session"));
+            if let Ok(saved) = CreatePopupMenu() {
+                for (i, (name, _)) in self.saved.iter().enumerate().take((IDM_SAVED_MAX - IDM_SAVED_MIN) / 0x10) {
+                    let name = wide(&name.replace('&', "&&"));
+                    let _ = AppendMenuW(saved, MF_STRING, IDM_SAVED_MIN + i * 0x10, PCWSTR(name.as_ptr()));
+                }
+                if self.saved.is_empty() {
+                    let _ = AppendMenuW(saved, MF_GRAYED, IDM_SAVED_MIN, w!("(No sessions)"));
+                }
+                let _ = AppendMenuW(m, MF_POPUP, saved.0 as usize, w!("Sa&ved Sessions"));
+            }
+            let _ = AppendMenuW(m, MF_STRING, IDM_RECONF, w!("Chan&ge Settings..."));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(m, MF_STRING, IDM_COPYALL, w!("C&opy All to Clipboard"));
+            let _ = AppendMenuW(m, MF_STRING, IDM_CLRSB, w!("C&lear Scrollback"));
+            let _ = AppendMenuW(m, MF_STRING, IDM_RESET, w!("Rese&t Terminal"));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            let full = if self.full_screen.is_some() { MF_CHECKED } else { MF_UNCHECKED };
+            let _ = AppendMenuW(m, MF_STRING | full, IDM_FULLSCREEN, w!("&Full Screen"));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
+            let _ = AppendMenuW(m, MF_STRING, IDM_HELP, w!("&Help"));
+            let _ = AppendMenuW(m, MF_STRING, IDM_ABOUT, w!("&About RustuTTY"));
+        }
+    }
+
+    /// The menu changes with the session, so it's rebuilt each time it opens.
+    fn refresh_system_menu(&self) {
+        unsafe {
+            let m = GetSystemMenu(self.main, false);
+            while GetMenuItemCount(Some(m)) > self.system_items {
+                if DeleteMenu(m, self.system_items as u32, MF_BYPOSITION).is_err() {
+                    break;
+                }
+            }
+            self.fill_window_menu(m);
+        }
+    }
+
+    fn popup_window_menu(&self, extra: &[(usize, PCWSTR)]) {
+        unsafe {
+            let Ok(menu) = CreatePopupMenu() else { return };
+            for &(id, text) in extra {
+                let _ = AppendMenuW(menu, MF_STRING, id, text);
+            }
+            if !extra.is_empty() {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            }
+            self.fill_window_menu(menu);
+            let mut p = POINT::default();
+            let _ = GetCursorPos(&mut p);
+            let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, p.x, p.y, Some(0), self.main, None);
+            let _ = DestroyMenu(menu);
         }
     }
 
@@ -1135,11 +1331,6 @@ impl Deck {
             (ID_PASTE, _) => self.paste(),
             (ID_COPY_ALL, BN_CLICKED) => self.copy_all(),
             (ID_PASTE_ALL, BN_CLICKED) => self.paste_all(),
-            (ID_MENU_DUPLICATE, _) => {
-                if let Some(t) = self.current().map(|s| s.target.clone()) {
-                    self.open_target(t);
-                }
-            }
             (ID_MENU_CLOSE, _) => {
                 if let Some(i) = self.active {
                     self.close_session(i);
@@ -1149,6 +1340,9 @@ impl Deck {
             (ID_MENU_EDIT, _) | (ID_SETTINGS, BN_CLICKED) => {
                 let i = unsafe { SendMessageW(self.saved_list, LB_GETCURSEL, None, None) }.0;
                 self.edit_saved(usize::try_from(i).ok());
+            }
+            (id, 0) => {
+                self.window_command(id);
             }
             _ => {}
         }
@@ -1227,27 +1421,11 @@ impl Deck {
 
     fn session_menu(&mut self, i: usize) {
         self.select(i);
-        unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, ID_MENU_DUPLICATE, w!("Duplicate session"));
-            let _ = AppendMenuW(menu, MF_STRING, ID_MENU_CLOSE, w!("Close session"));
-            let mut p = POINT::default();
-            let _ = GetCursorPos(&mut p);
-            let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, p.x, p.y, Some(0), self.main, None);
-            let _ = DestroyMenu(menu);
-        }
+        self.popup_window_menu(&[(ID_MENU_CLOSE, w!("Close session"))]);
     }
 
     fn context_menu(&mut self) {
-        unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, ID_COPY, w!("Copy"));
-            let _ = AppendMenuW(menu, MF_STRING, ID_PASTE, w!("Paste"));
-            let mut p = POINT::default();
-            let _ = GetCursorPos(&mut p);
-            let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, p.x, p.y, Some(0), self.main, None);
-            let _ = DestroyMenu(menu);
-        }
+        self.popup_window_menu(&[]);
     }
 
     fn saved_menu(&mut self, row: Option<usize>) {
@@ -1394,6 +1572,8 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             take_focus(d.content);
         }
         WM_COMMAND => d.command(wp.0 & 0xffff, (wp.0 >> 16) as u32 & 0xffff),
+        WM_SYSCOMMAND if d.window_command(wp.0 & !0xf) => {}
+        WM_INITMENU if GetSystemMenu(hwnd, false).0 as usize == wp.0 => d.refresh_system_menu(),
         WM_DRAWITEM if wp.0 == ID_LIST => {
             d.draw_session_row(&*(lp.0 as *const DRAWITEMSTRUCT));
             return LRESULT(1);
@@ -1502,6 +1682,8 @@ unsafe extern "system" fn content_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 s.send(format!("\x1b{c}").into_bytes());
             }
         }
+        // Ctrl and the right button is PuTTY's way to the window menu, in any program.
+        WM_RBUTTONUP if ctrl_down() => d.context_menu(),
         // A program with mouse reporting on gets the mouse, unless Shift is held.
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP
             if !d.selecting && d.report_mouse(msg, lp) => {}
@@ -1675,7 +1857,7 @@ fn main() {
             sessions: Vec::new(), active: None, next_id: 1, saved,
             inbox: Default::default(), rt, store,
             skip_char: false, high_surrogate: None, selecting: false, focused: false,
-            started: std::time::Instant::now(), cursor_off: false, flash: false, pointer_hidden: false, compose_state: 0, compose_first: 0, full_screen: None, close_held: None,
+            started: std::time::Instant::now(), cursor_off: false, flash: false, pointer_hidden: false, compose_state: 0, compose_first: 0, full_screen: None, close_held: None, system_items: 0,
         }));
         DECK.store(d, Ordering::Release);
         let d = &mut *d;
@@ -1684,6 +1866,7 @@ fn main() {
             let text = wide(name);
             SendMessageW(d.saved_list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
+        d.system_items = GetMenuItemCount(Some(GetSystemMenu(main, false)));
         d.layout();
         SetTimer(Some(content), TIMER_BLINK, BLINK_MS, None);
         // A test window must never take the keyboard from whoever is using this PC.

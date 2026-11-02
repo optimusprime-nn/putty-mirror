@@ -473,6 +473,38 @@ async fn the_close_box_closes_its_own_row_only() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_ended_session_can_be_restarted_from_the_window_menu() {
+    const IDM_RESTART: usize = 0x40;
+    let p = Peer::start().await;
+    let app = App::start(&raw_args(p.port));
+    p.connected(1).await;
+    // Refused while it's still running
+    app.post(app.main, WM_SYSCOMMAND, IDM_RESTART, 0);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(p.got.lock().unwrap().len(), 1, "a live session isn't restarted");
+
+    p.out.lock().unwrap()[0] = tokio::sync::mpsc::unbounded_channel().0;
+    app.until("ended", |d| d.contains("(ended)")).await;
+    assert!(text_of(app.main).contains("(inactive)"));
+    app.post(app.main, WM_SYSCOMMAND, IDM_RESTART, 0);
+    p.connected(2).await;
+    app.until("running again", |d| d.contains("sessions=1") && !d.contains("(ended)")).await;
+    p.send(1, b"back again");
+    app.sees("back again").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn special_commands_reach_a_telnet_host() {
+    const IDM_SPECIAL_MIN: usize = 0x400;
+    let p = Peer::start().await;
+    let app = App::start(&[format!("telnet://127.0.0.1:{}", p.port)]);
+    p.connected(1).await;
+    app.until("open", |d| d.contains("sessions=1")).await;
+    app.post(app.main, WM_SYSCOMMAND, IDM_SPECIAL_MIN, 0);
+    p.wait(0, &[255, 246]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_dropped_connection_leaves_the_session_readable() {
     let p = Peer::start().await;
     let app = App::start(&raw_args(p.port));
