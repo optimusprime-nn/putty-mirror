@@ -115,6 +115,22 @@ pub fn init(remember: bool) {
     app_mode();
 }
 
+/// A number kept for next time, such as a window's size.
+pub fn remembered(name: &str) -> Option<u32> {
+    if !SAVE.load(Ordering::Relaxed) {
+        return None;
+    }
+    RegKey::predef(HKEY_CURRENT_USER).open_subkey(KEY).ok()?.get_value(name).ok()
+}
+
+pub fn remember(name: &str, value: u32) {
+    if SAVE.load(Ordering::Relaxed) {
+        if let Ok((key, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(KEY) {
+            let _ = key.set_value(name, &value);
+        }
+    }
+}
+
 /// Changes the appearance. The caller repaints its windows with `restyle`.
 pub fn set_dark(on: bool) {
     DARK.store(on, Ordering::Relaxed);

@@ -22,12 +22,15 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::*;
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetCapture, ReleaseCapture, SetCapture, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 // A test window opens off-screen, takes no focus, and uses no registry.
 const TEST: bool = cfg!(any(test, feature = "test-hooks"));
 const STYLE: u32 = 0x80 | 0x40 | WS_POPUP.0 | WS_CAPTION.0 | WS_SYSMENU.0; // DS_MODALFRAME | DS_SETFONT
+/// The settings window itself can be resized, and maximised.
+const RESIZABLE: u32 = STYLE | WS_THICKFRAME.0 | WS_MAXIMIZEBOX.0;
+/// The size PuTTY's panels are laid out for, which is also the smallest allowed.
 const WIDTH: i32 = 300;
 const HEIGHT: i32 = 252;
 const ID_TREE_LABEL: i32 = 100;
@@ -118,6 +121,8 @@ struct Dlg {
     owner: HWND,
     font: HFONT,
     dpi: u32,
+    /// The window's client area, in dialog units.
+    size: (i32, i32),
     /// Pixels in 4 dialog units across and 8 down.
     bx: i32,
     by: i32,
@@ -245,10 +250,10 @@ fn valid_host_key(text: &str) -> Option<String> {
     None
 }
 
-fn template(title: &str, width: i16, height: i16, ex: u32) -> Vec<u32> {
+fn template(title: &str, style: u32, width: i16, height: i16, ex: u32) -> Vec<u32> {
     let mut t: Vec<u16> = Vec::new();
     let pair = |v: u32| [v as u16, (v >> 16) as u16];
-    t.extend(pair(STYLE));
+    t.extend(pair(style));
     t.extend(pair(ex));
     t.extend([0, 0, 0, width as u16, height as u16, 0, 0]);
     t.extend(title.encode_utf16().chain([0]));
@@ -461,23 +466,110 @@ impl Dlg {
         self.titles.clear();
     }
 
-    /// Everything in the dialog, for this DPI.
-    fn build(&mut self) {
+    /// The window's outer size for a client size in dialog units.
+    fn window_size(&self, width: i32, height: i32) -> (i32, i32) {
+        let mut r = RECT { left: 0, top: 0, right: self.px([width, 0, 0, 0])[0], bottom: self.px([0, height, 0, 0])[1] };
         unsafe {
-            let mut r = RECT { left: 0, top: 0, right: self.px([WIDTH, 0, 0, 0])[0], bottom: self.px([0, HEIGHT, 0, 0])[1] };
             let ex = WINDOW_EX_STYLE(GetWindowLongW(self.hwnd, GWL_EXSTYLE) as u32);
-            let _ = AdjustWindowRectExForDpi(&mut r, WINDOW_STYLE(STYLE), false, ex, self.dpi);
-            let _ = SetWindowPos(self.hwnd, None, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = AdjustWindowRectExForDpi(&mut r, WINDOW_STYLE(RESIZABLE), false, ex, self.dpi);
         }
+        (r.right - r.left, r.bottom - r.top)
+    }
+
+    /// The window at its size, or at what fits on the monitor if that's less.
+    fn fit_window(&mut self) {
+        let (mut cx, mut cy) = self.window_size(self.size.0, self.size.1);
+        unsafe {
+            let monitor = MonitorFromWindow(if self.owner.is_invalid() { self.hwnd } else { self.owner }, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let (least_x, least_y) = self.window_size(WIDTH, HEIGHT);
+            let shrunk = GetMonitorInfoW(monitor, &mut info).as_bool()
+                && (cx > (info.rcWork.right - info.rcWork.left).max(least_x) || cy > (info.rcWork.bottom - info.rcWork.top).max(least_y));
+            if shrunk {
+                cx = cx.min((info.rcWork.right - info.rcWork.left).max(least_x));
+                cy = cy.min((info.rcWork.bottom - info.rcWork.top).max(least_y));
+            }
+            let _ = SetWindowPos(self.hwnd, None, 0, 0, cx, cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            if shrunk {
+                self.size = self.client_size();
+            }
+        }
+    }
+
+    fn client_size(&self) -> (i32, i32) {
+        let mut r = RECT::default();
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut r);
+        }
+        ((r.right * 4 / self.bx).max(WIDTH), (r.bottom * 8 / self.by).max(HEIGHT))
+    }
+
+    /// The buttons along the bottom.
+    fn make_fixed(&mut self) {
         let base = (0..self.cbox.sets.len()).find(|&i| self.cbox.sets[i].path.is_empty()).unwrap();
         let mut next = ID_FIRST;
-        let mut cp = layout::start(self.client_dlu(), 3, 3, 235);
+        let mut cp = layout::start(self.client_dlu(), 3, 3, self.size.1 - (HEIGHT - 235));
         self.create_set(base, &mut cp, &mut next, true);
+    }
+
+    fn tree_rect(&self) -> [i32; 4] {
+        self.px([3, 13, 95, self.size.1 - (HEIGHT - 219)])
+    }
+
+    /// The person resized the window. The tree stays, keeping what's expanded;
+    /// the rest is laid out again for the new size.
+    fn resized(&mut self) {
+        let size = self.client_size();
+        if size == self.size {
+            return;
+        }
+        self.size = size;
+        self.initialised = false;
+        send(self.hwnd, WM_SETREDRAW, 0, 0);
+        unsafe {
+            let focus = GetFocus();
+            let focus_id = GetDlgCtrlID(focus);
+            let label = GetDlgItem(Some(self.hwnd), ID_TREE_LABEL).unwrap_or_default();
+            self.destroy_panel();
+            let tree = self.tree;
+            self.fixed.retain(|&h| {
+                let keep = h == tree || h == label;
+                if !keep {
+                    let _ = DestroyWindow(h);
+                }
+                keep
+            });
+            self.insts.clear();
+            let kept = std::mem::take(&mut self.fixed);
+            self.make_fixed();
+            let last = self.fixed.last().copied();
+            self.fixed.extend(kept);
+            // Back in their place in the tab order, after the buttons
+            let r = self.tree_rect();
+            let _ = SetWindowPos(label, last, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            let _ = SetWindowPos(tree, Some(label), r[0], r[1], r[2], r[3], SWP_NOACTIVATE);
+            self.create_panel();
+            self.refresh();
+            self.initialised = true;
+            send(self.hwnd, WM_SETREDRAW, 1, 0);
+            let _ = RedrawWindow(Some(self.hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+            if !TEST && focus_id != 0 {
+                if let Ok(h) = GetDlgItem(Some(self.hwnd), focus_id) {
+                    let _ = SetFocus(Some(h));
+                }
+            }
+        }
+    }
+
+    /// Everything in the dialog, for this DPI.
+    fn build(&mut self) {
+        self.fit_window();
+        self.make_fixed();
 
         let label = self.make("STATIC", WS_CHILD.0 | WS_VISIBLE.0, 0, "Cate&gory:", self.px([3, 3, 95, 10]), ID_TREE_LABEL);
         self.fixed.push(label);
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_DISABLEDRAGDROP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT;
-        self.tree = self.make("SysTreeView32", style, 0x200, "", self.px([3, 13, 95, 219]), ID_TREE);
+        self.tree = self.make("SysTreeView32", style, 0x200, "", self.tree_rect(), ID_TREE);
         send(self.tree, TVM_SETITEMHEIGHT, (24 * self.dpi / 96) as usize, 0);
         send(self.tree, TVM_SETEXTENDEDSTYLE, 4, 4); // TVS_EX_DOUBLEBUFFER
         self.fixed.push(self.tree);
@@ -1640,6 +1732,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             }
             0
         }
+        WM_GETMINMAXINFO if d.initialised => {
+            let (cx, cy) = d.window_size(WIDTH, HEIGHT);
+            (*(lp.0 as *mut MINMAXINFO)).ptMinTrackSize = POINT { x: cx, y: cy };
+            1
+        }
+        WM_SIZE if d.initialised && wp.0 != SIZE_MINIMIZED as usize => {
+            d.resized();
+            0
+        }
         WM_DPICHANGED => {
             let r = *(lp.0 as *const RECT);
             d.dpi_changed((wp.0 & 0xffff) as u32, Some(r));
@@ -1717,7 +1818,7 @@ unsafe extern "system" fn about_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
 }
 
 fn show_box(owner: HWND, title: &str, width: i16, height: i16, param: isize) {
-    let t = template(title, width, height, 0);
+    let t = template(title, STYLE, width, height, 0);
     unsafe {
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
         DialogBoxIndirectParamW(Some(instance), t.as_ptr().cast(), Some(owner), Some(about_proc), LPARAM(param));
@@ -1731,11 +1832,13 @@ fn about(owner: HWND) {
 fn run(owner: HWND, mid: bool, name: &str, settings: Settings) -> (bool, String, Settings) {
     let user = std::env::var("USERNAME").unwrap_or_default();
     let protocol = settings.s("Protocol", "ssh");
+    let kept = |name, least: i32| deck_ui::remembered(name).map_or(least, |v| (v as i32).clamp(least, 4000));
     let mut d = Dlg {
         hwnd: HWND::default(),
         owner,
         font: HFONT::default(),
         dpi: 96,
+        size: (kept("SettingsWidth", WIDTH), kept("SettingsHeight", HEIGHT)),
         bx: 6,
         by: 13,
         mid,
@@ -1762,7 +1865,7 @@ fn run(owner: HWND, mid: bool, name: &str, settings: Settings) -> (bool, String,
     d.reload_names();
     let title = format!("{APP} {}", if mid { "Reconfiguration" } else { "Configuration" });
     let ex = if TEST { (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 } else { 0 };
-    let tmpl = template(&title, WIDTH as i16, HEIGHT as i16, ex);
+    let tmpl = template(&title, RESIZABLE, WIDTH as i16, HEIGHT as i16, ex);
     unsafe {
         let _ = InitCommonControlsEx(&INITCOMMONCONTROLSEX { dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES });
         let instance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
@@ -1808,6 +1911,10 @@ fn run(owner: HWND, mid: bool, name: &str, settings: Settings) -> (bool, String,
             }
         }
         let _ = EnableWindow(owner, true);
+        if !IsZoomed(hwnd).as_bool() {
+            deck_ui::remember("SettingsWidth", d.size.0 as u32);
+            deck_ui::remember("SettingsHeight", d.size.1 as u32);
+        }
         let _ = DestroyWindow(hwnd);
         let _ = DeleteObject(d.font.into());
         DLG = std::ptr::null_mut();
@@ -2130,6 +2237,42 @@ mod tests {
             },
         );
         with_script(|d| d.ended = Some(false), || assert!(reconfigure(HWND::default(), HFONT::default(), host("h")).is_none()));
+    }
+
+    #[test]
+    fn it_can_be_resized_without_losing_anything() {
+        with_script(
+            |d| {
+                let bottom = |h: HWND| {
+                    let mut r = RECT::default();
+                    unsafe { GetWindowRect(h, &mut r).unwrap() };
+                    r
+                };
+                panel(d, "Terminal");
+                d.set_str("TerminalType", "vt220");
+                let (before, tree) = (bottom(d.hwnd), bottom(d.tree));
+                let hwnd = d.hwnd;
+                let grow = |cx, cy| unsafe {
+                    SetWindowPos(hwnd, None, 0, 0, cx, cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE).unwrap();
+                };
+                let (w, h) = (before.right - before.left, before.bottom - before.top);
+                grow(w + 300, h + 200);
+                assert!(d.size.0 > WIDTH && d.size.1 > HEIGHT);
+                assert_eq!(d.path, "Terminal", "the same panel stays open");
+                assert_eq!(bottom(d.tree).bottom - tree.bottom, 200, "the tree takes the new height");
+                assert_eq!(bottom(d.tree).right - bottom(d.tree).left, tree.right - tree.left, "and keeps its width");
+                assert_eq!(d.settings.s("TerminalType", ""), "vt220", "what was changed is still changed");
+                let widest = d.panel.iter().map(|&h| bottom(h).right).max().unwrap();
+                assert!(widest > before.right, "the panel's controls take the new width");
+                grow(10, 10);
+                let small = bottom(d.hwnd);
+                assert_eq!((small.right - small.left, small.bottom - small.top), (w, h), "it can't be made too small for a panel");
+                assert_eq!((d.size.0, d.size.1), (WIDTH, HEIGHT));
+            },
+            || {
+                edit(HWND::default(), HFONT::default(), "s", host("example"));
+            },
+        );
     }
 
     /// Run by hand with RUSTUTTY_SHOTS set to a folder. Writes every panel as a BMP.
